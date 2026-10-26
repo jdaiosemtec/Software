@@ -353,11 +353,11 @@ SAVE.shield = clampLvl(SAVE.shield, SHIELDS); SAVE.mount = clampLvl(SAVE.mount, 
 // every positive pick-up can be upgraded the same way: 10 levels, price = half of the same-level ride price
 const lvTable = (fn) => Array.from({ length: 10 }, (_, i) => Object.assign(fn(i), { price: i ? MOUNTS[i].price / 2 : undefined }));
 const MAGNET_LV = lvTable(i => ({ name: 'Magnet ' + (8 + i) + ' s', t: 8 + i }));
-const DOUBLE_LV = lvTable(i => ({ name: 'Double Coins ' + (10 + i) + ' s', t: 10 + i }));
+const DOUBLE_LV = lvTable(i => ({ name: 'Coins \u00d7' + (2 + Math.floor(i / 2)) + ' \u00b7 ' + (10 + i) + ' s', t: 10 + i, x: 2 + Math.floor(i / 2) }));   // v25: x2 at Lv1, +1 every 2 levels (Lv3 x3, Lv5 x4 ... Lv9 x6)
 const DASH_LV = lvTable(i => ({ name: 'Dash ' + (4 + i) + ' s', t: 4 + i }));
 const ROCKET_LV = lvTable(i => ({ name: 'Rocket ' + (5 + i) + ' s', t: 5 + i }));
 const MTIME_LV = lvTable(i => ({ name: 'Missile Time ' + (5 + .4 * i).toFixed(1) + ' s', t: Math.round((5 + .4 * i) * 10) / 10 }));   // v12: missile reload x2, 5 s +0.4 s per level
-const BOMB_LV = lvTable(i => ({ name: 'Coin Bomb \u00d7' + (2 + i), n: 2 + i }));            // coins per obstacle
+const BOMB_LV = lvTable(i => ({ name: 'Coin Combo \u00d7' + (Math.round((.5 + 1.5 * i / 9) * 100) / 100), f: Math.round((.5 + 1.5 * i / 9) * 100) / 100 }));   // v25: Coin Combo spawn rate, x0.5 .. x2 of the old rate
 const MILK_LV = lvTable(i => ({ name: 'Milk +' + (1 + Math.floor(i / 3)), n: 1 + Math.floor(i / 3) }));   // hearts restored
 const CHEST_LV = lvTable(i => ({ name: 'Treasure \u00d7' + (1 + i * .25), m: 1 + i * .25 }));   // chest coins multiplier
 // v10: above level 5, every upgrade costs 1.5x the previous one (rounded to 5)
@@ -391,6 +391,8 @@ for (const tb of [PETS, MOUNTS]) for (const it of tb) if (it.price) it.price = M
 // v21: Weapon prices x3; Pet and Ride prices x1.5 again (rounded to 5)
 for (const it of WEAPONS) if (it.price) it.price *= 3;
 for (const tb of [PETS, MOUNTS]) for (const it of tb) if (it.price) it.price = Math.round(it.price * 1.5 / 5) * 5;
+// v25: Double Coins prices x2 (it now also raises the multiplier)
+for (const it of DOUBLE_LV) if (it.price) it.price *= 2;
 // v17: triple jump is the second upgrade of the jump card (level 1 = double jump, level 2 = triple jump)
 const JUMP_LV = [{ name: 'Single Jump' }, { name: 'Double Jump', price: DBL_LV[1].price }, { name: 'Triple Jump', price: TRI_LV[1].price }];
 // v13: distance rewards (40 px = 1 m)
@@ -1305,9 +1307,9 @@ function resetGame() {
     // v2: power-ups, events, coin patterns
     pet: { x: 60, y: GROUND_Y, guardT: 0, shootT: 1.2, fetchT: 0, revived: false, flash: 0 }, dist: 0, distIdx: 0, flags: [], tramps: [], trampT: uni(6, 9),
     pu: { magnet: 0, double: 0, dash: 0, rocket: 0, mtime: 0, boost: SDASH_LV[SAVE.sdash].t }, boostAcc: 0, dashGrace: 0, wind: 0, rainT: 0, rainAcc: 0, rocketAcc: 0, orbs: [], chests: [],
-    orbTimer: uni(10, 16), patTimer: uni(4, 7), eventClock: uni(20, 30), banners: [],
+    orbTimer: uni(10, 16), comboOrbT: uni(10, 16) * 5 / BOMB_LV[SAVE.bomb].f, patTimer: uni(4, 7), eventClock: uni(20, 30), banners: [],
     // v4: combo, revive
-    combo: 0, comboT: 0, revives: 0,
+    combo: 0, comboT: 0, comboCap: 0, comboTB: 0, revives: 0,
     // v8: ride missiles
     missiles: [], missileT: MOUNTS[SAVE.mount].missile ? MOUNTS[SAVE.mount].missile.period : 0,
     // v10: terrain, MASON letters + bonus stage, near misses
@@ -1333,7 +1335,9 @@ const dashOn = () => S.pu.dash > 0 || flyingNow() || S.dashGrace > 0;
 const speedMult = () => S.pu.boost > 0 ? 10 : S.triT > 0 ? 3 : S.pu.dash > 0 ? 1.8 : S.bonusT > 0 ? 1.4 : S.pu.rocket > 0 ? 1.5 : 1;
 const LETTERS = ['M', 'A', 'S', 'O', 'N'];
 const orbDur = k => k === 'magnet' ? MAGNET_LV[SAVE.magnet].t : k === 'double' ? DOUBLE_LV[SAVE.double].t : k === 'dash' ? DASH_LV[SAVE.dash].t : k === 'rocket' ? ROCKET_LV[SAVE.rocket].t : k === 'mtime' ? MTIME_LV[SAVE.mtime].t : k === 'boost' ? SDASH_LV[SAVE.sdash].t : ORB_INFO[k].t;
-const comboMult = () => 1 + Math.min(4, Math.floor(S.combo / 15)) * .5;      // v4: x1 .. x3 score from coins
+const comboMult = () => 1 + Math.min(4 + (S.comboCap || 0), Math.floor(S.combo / 15)) * .5;      // v4: x1 .. x3 score from coins (v25: each Coin Combo raises the cap one step)
+const comboWin = () => 2.5 + (S.comboTB || 0);                                 // v25: combo window, +0.1 s per Coin Combo
+const coinMult = () => S.pu && S.pu.double > 0 ? DOUBLE_LV[SAVE.double].x : 1;   // v25: Double Coins multiplier grows with its level
 function missionAdd(id, amt = 1, setMax = false) {
   for (const m of SAVE.missions) {
     if (m.id !== id || m.done) continue;
@@ -1468,7 +1472,7 @@ function step() {
     S.collects = S.collects.filter(k => k !== c);
     const cx = c.x + c.w / 2, cy = c.y + c.h / 2;
     if (c.typ === 'coin') {
-      const m = S.pu.double > 0 ? 2 : 1, before = comboMult(); S.combo++; S.comboT = 2.5;
+      const m = coinMult(), before = comboMult(); S.combo++; S.comboT = comboWin();
       const pts = Math.round(100 * m * before); coinSound(S.combo); S.coins += m; S.score += pts; floatText('+' + pts, [255, 215, 0]); burst(cx, cy, 'gold'); missionAdd('coins', m);
       if (comboMult() > before) queueBanner('Combo \u00d7' + comboMult(), S.combo + ' coins in a row', [255, 190, 90], 1.2);
     }
@@ -1595,7 +1599,7 @@ function hazardHits() {
 // ---------------- v2: power-ups, events, coin patterns ----------------
 const ORB_INFO = {
   boost: { name: 'Start Dash', sub: 'x10 speed', t: 5, col: [255, 170, 70] }, magnet: { name: 'Magnet', sub: 'Coins fly to Mason', t: 8, col: [255, 110, 110] }, double: { name: 'Double Coins', sub: 'Every coin counts twice', t: 10, col: [120, 230, 120] },
-  dash: { name: 'Dash', sub: 'Smash through everything', t: 4, col: [255, 200, 70] }, rocket: { name: 'Rocket', sub: 'Hold jump / crouch to fly up and down', t: 5, col: [255, 120, 90] }, bomb: { name: 'Coin Bomb', sub: 'Obstacles turn into coins', t: 0, col: [255, 214, 90] },
+  dash: { name: 'Dash', sub: 'Smash through everything', t: 4, col: [255, 200, 70] }, rocket: { name: 'Rocket', sub: 'Hold jump / crouch to fly up and down', t: 5, col: [255, 120, 90] }, bomb: { name: 'Coin Combo', sub: 'Combo cap up \u00b7 longer combo window', t: 0, col: [255, 214, 90] },
   mtime: { name: 'Missile Time', sub: 'Ride missiles reload twice as fast', t: 5, col: [120, 170, 255] } };
 function extrasStep(dt, dx) {
   const dashBefore = S.pu.dash, rocketBefore = S.pu.rocket, boostBefore = S.pu.boost;
@@ -1620,7 +1624,8 @@ function extrasStep(dt, dx) {
   petStep(dt);
   if (S.bonusT > 0) { bonusStep(dt); return false; }
   if (!S.boss) {
-    S.orbTimer -= dt; if (S.orbTimer <= 0) { S.orbs.push({ typ: ['magnet', 'double', 'bomb', 'rocket', 'mtime'][ri(0, 4)], x: LW + 40, y: itemBase() - ri(110, 175), w: 30, h: 30 }); S.orbTimer = uni(13, 20); }
+    S.orbTimer -= dt; if (S.orbTimer <= 0) { S.orbs.push({ typ: pickOrb(), x: LW + 40, y: itemBase() - ri(110, 175), w: 30, h: 30 }); S.orbTimer = uni(13, 20) * 1.25; }
+    S.comboOrbT -= dt; if (S.comboOrbT <= 0) { S.orbs.push({ typ: 'bomb', x: LW + 40, y: itemBase() - ri(110, 175), w: 30, h: 30 }); S.comboOrbT = uni(13, 20) * 5 / BOMB_LV[SAVE.bomb].f; }   // v25: Coin Combo has its own clock (old rate x0.5 .. x2)
     S.patTimer -= dt; if (S.patTimer <= 0) { coinPattern(); S.patTimer = uni(6, 10) / .7; }
     S.eventClock -= dt; if (S.eventClock <= 0) { startEvent(); S.eventClock = uni(28, 40); }
   }
@@ -1632,24 +1637,21 @@ function extrasStep(dt, dx) {
   for (const c of S.chests.slice()) if (hit(chestRect(c), P)) { S.chests = S.chests.filter(k => k !== c); openChest(c); }
   return false;
 }
+function pickOrb() { return ['magnet', 'double', 'rocket', 'mtime'][ri(0, 3)]; }   // v25: the other four keep their old rate (timer x1.25); Coin Combo spawns on its own clock
 function takeOrb(typ, x, y) {
   const I = ORB_INFO[typ]; synth('power'); burst(x, y, 'gold');
-  if (typ === 'bomb') coinBomb(); else S.pu[typ] = orbDur(typ);
+  let sub = I.sub;
+  if (typ === 'bomb') {                          // v25: Coin Combo (replaces Coin Bomb) - stacks for the rest of the run
+    S.comboCap = (S.comboCap || 0) + 1; S.comboTB = Math.round(((S.comboTB || 0) + .1) * 10) / 10;
+    sub = `Combo max \u00d7${1 + (4 + S.comboCap) * .5} \u00b7 window ${comboWin().toFixed(1)} s`;
+  } else S.pu[typ] = orbDur(typ);
+  if (typ === 'double') sub = `Every coin counts \u00d7${DOUBLE_LV[SAVE.double].x}`;
   if (typ === 'rocket') synth('rocketGo');
   if (typ === 'mtime') synth('missile');
-  queueBanner(I.name, I.sub, I.col, 1.5); missionAdd('power');
-}
-function coinBomb() {
-  FX.impactFlash = 1; synth('smash');
-  const addCoin = (x, y) => S.collects.push({ typ: 'coin', x: Math.round(x) - 16, y: Math.round(y) - 16, w: 32, h: 32, angle: ri(0, 59) * 6, glint: Math.random() * 2 });
-  const per = BOMB_LV[SAVE.bomb].n;
-  for (const o of S.obstacles.filter(o => o.x < LW)) { const cx = o.x + o.w / 2, cy = Math.min(GROUND_Y - 40, o.y + o.h / 2); for (let k = 0; k < per; k++) addCoin(cx + (k % 2) * 34 - 17 * (per > 1), Math.max(-CAM + 30, cy - Math.floor(k / 2) * 36)); smash(cx, cy); }
-  S.obstacles = S.obstacles.filter(o => o.x >= LW);
-  for (const m of S.meteors.filter(m => m.x < LW)) { addCoin(m.x + m.w / 2, Math.max(-CAM + 30, Math.min(GROUND_Y - 40, m.y + m.h / 2))); smash(m.x + m.w / 2, m.y + m.h / 2); }
-  S.meteors = S.meteors.filter(m => m.x >= LW);
+  queueBanner(I.name, sub, I.col, 1.5); missionAdd('power');
 }
 function openChest(c) {
-  const m = S.pu.double > 0 ? 2 : 1, n = Math.round(ri(10, 30) * CHEST_LV[SAVE.chest].m) * m;
+  const m = coinMult(), n = Math.round(ri(10, 30) * CHEST_LV[SAVE.chest].m * 1.5) * m;   // v25: chest coins x1.5
   S.coins += n; S.score += n * 50; synth('chest');
   floatText('+' + n + ' coins', [255, 214, 90]);
   for (let i = 0; i < 24; i++) part({ x: c.x + 23, y: c.y + 10, vx: uni(-120, 120), vy: uni(-320, -160), ay: 700, life: 1, max: 1, size: 5, col: [255, 214, 90], add: false, shape: 'coin' });
@@ -1771,7 +1773,7 @@ function distStep(dx) {
   for (const f of S.flags) f.x -= dx;
   for (const f of S.flags.slice()) if (f.x <= P.x + PW / 2) {
     S.flags = S.flags.filter(k => k !== f); S.distIdx = f.idx + 1;
-    const n = distReward(f.idx) * (S.pu.double > 0 ? 2 : 1); S.coins += n; S.score += n * 20; synth('chest');
+    const n = distReward(f.idx) * coinMult(); S.coins += n; S.score += n * 20; synth('chest');
     queueBanner(f.m.toLocaleString() + ' m!', 'Distance reward \u00b7 +' + n + ' coins', [140, 230, 255], 1.8);
     for (let i = 0; i < 22; i++) part({ x: f.x, y: GROUND_Y - 120, vx: uni(-160, 160), vy: uni(-320, -120), ay: 700, life: 1, max: 1, size: 5, col: [255, 214, 90], add: false, shape: 'coin' });
   }
@@ -2007,7 +2009,7 @@ function fireWeapon(b) {
 function endBoss(win) {
   const b = S.boss; S.boss = null; S.bossQueue = []; S.eproj = []; S.bullets = []; S.bossClock = 0;
   if (win) {
-    const m = S.pu.double > 0 ? 2 : 1, reward = (10 + 8 * b.lv) * m;
+    const m = coinMult(), reward = (10 + 8 * b.lv) * m;
     S.coins += reward; S.score += 500 * b.lv; S.hp = Math.min(MAX_HP, S.hp + 1); S.bossesBeaten++;
     queueBanner('Boss Defeated!', '+' + reward + ' coins \u00b7 +1 heart', [255, 214, 90], 2.4);
     for (let i = 0; i < 30; i++) part({ x: b.x, y: b.y, vx: uni(-260, 160), vy: uni(-360, -120), ay: 700, life: 1.2, max: 1.2, size: 5, col: [255, 214, 90], add: false, shape: 'coin', scroll: false });
@@ -2334,10 +2336,10 @@ const SHOP = [
   { key: 'mount', label: 'Ride', table: MOUNTS, eff: l => `${MOUNTS[l].hp} hearts` + (MOUNTS[l].missile ? ` \u00b7 missile every ${MOUNTS[l].missile.period} s` : '') },
   { key: 'weapon', label: 'Weapon', table: WEAPONS, eff: l => `${WEAPONS[l].desc} \u00b7 power ${weaponPower(l)}` },
   { key: 'magnet', label: 'Magnet', table: MAGNET_LV, eff: l => `Magnet lasts ${MAGNET_LV[l].t} s` },
-  { key: 'double', label: 'Double Coins', table: DOUBLE_LV, eff: l => `Double Coins lasts ${DOUBLE_LV[l].t} s` },
+  { key: 'double', label: 'Double Coins', table: DOUBLE_LV, eff: l => `Coins \u00d7${DOUBLE_LV[l].x} for ${DOUBLE_LV[l].t} s` },
   { key: 'rocket', label: 'Rocket', table: ROCKET_LV, eff: l => `Rocket flight lasts ${ROCKET_LV[l].t} s` },
   { key: 'mtime', label: 'Missile Time', table: MTIME_LV, eff: l => `Missiles reload 2\u00d7 faster for ${MTIME_LV[l].t} s` },
-  { key: 'bomb', label: 'Coin Bomb', table: BOMB_LV, eff: l => `${BOMB_LV[l].n} coins per obstacle` },
+  { key: 'bomb', label: 'Coin Combo', table: BOMB_LV, eff: l => `Shows up \u00d7${BOMB_LV[l].f} as often \u00b7 each one: combo max +0.5\u00d7, window +0.1 s` },
   { key: 'chest', label: 'Treasure Chest', table: CHEST_LV, eff: l => `Chest coins \u00d7${CHEST_LV[l].m}` },
   { key: 'dblJump', label: 'Jump', table: JUMP_LV, eff: l => ['Unlock double jump: tap again in the air', 'Double jump: tap again in the air', 'Triple jump: after the double-jump flip, tap again to dash forward'][l] }];
 function renderShop() {             // v12: cards are built once; an upgrade refreshes only its own card in place (no rebuild = no scroll jump)
@@ -2371,7 +2373,7 @@ const PET_SKILLS = [
   { ic: '\u{1FA99}', name: 'Coin Magnet', from: 1, txt: s => `Pulls in every coin within ${s.pull} px of Mason.` },
   { ic: '\u{1F6E1}\uFE0F', name: 'Guard', from: 3, txt: s => `Blocks one hit for Mason, then recharges for ${s.guard} s. A gold ring shows when it is ready.` },
   { ic: '\u2728', name: 'Boss Shot', from: 5, txt: s => `Fires a homing shot at the boss every 1.2 s, each dealing ${(s.shoot * 100).toFixed(1)}% of the boss's max HP.` },
-  { ic: '\u{1F381}', name: 'Fetch', from: 7, txt: s => `Brings a random power-up (Magnet, Double Coins, Rocket, Missile Time or Coin Bomb) every ${s.fetch} s.` },
+  { ic: '\u{1F381}', name: 'Fetch', from: 7, txt: s => `Brings a random power-up (Magnet, Double Coins, Rocket, Missile Time or Coin Combo) every ${s.fetch} s.` },
   { ic: '\u{1F496}', name: 'Free Revive', from: 10, txt: () => 'Once per run, saves Mason from a game over and refills all hearts, free of charge.' }];
 function openPetInfo(l) { piLvl = l || Math.max(1, Math.min(PETS.length - 1, SAVE.pet || 1)); $('petInfo').hidden = false; fillPetInfo(); cancelAnimationFrame(piRaf); const tick = () => { if ($('petInfo').hidden) return; drawPetInfoPic(); piRaf = requestAnimationFrame(tick); }; tick(); }
 function closePetInfo() { $('petInfo').hidden = true; cancelAnimationFrame(piRaf); }
@@ -2424,8 +2426,8 @@ function drawShopPreview(cn, key, lvl) {
     for (const [x, y] of [[22, 80], [78, 46], [138, 70]]) { g.fillStyle = '#fff5df'; g.beginPath(); g.arc(x, y, 4.5, 0, 7); g.fill(); }
     g.fillStyle = '#fff5df'; g.font = `800 15px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui')}`; g.textAlign = 'center'; g.fillText(lvl ? '1 + 1' : String(JUMP_LV[1].price), 80, 90); return;
   }
-  const PU_PREVIEW = { magnet: [MAGNET_LV, v => v.t + 's'], double: [DOUBLE_LV, v => v.t + 's'], dash: [DASH_LV, v => v.t + 's'], rocket: [ROCKET_LV, v => v.t + 's'], mtime: [MTIME_LV, v => v.t + 's'],
-    bomb: [BOMB_LV, v => '\u00d7' + v.n], milk: [MILK_LV, v => '+' + v.n], chest: [CHEST_LV, v => '\u00d7' + v.m] };
+  const PU_PREVIEW = { magnet: [MAGNET_LV, v => v.t + 's'], double: [DOUBLE_LV, v => '\u00d7' + v.x + ' ' + v.t + 's'], dash: [DASH_LV, v => v.t + 's'], rocket: [ROCKET_LV, v => v.t + 's'], mtime: [MTIME_LV, v => v.t + 's'],
+    bomb: [BOMB_LV, v => '\u00d7' + v.f], milk: [MILK_LV, v => '+' + v.n], chest: [CHEST_LV, v => '\u00d7' + v.m] };
   if (PU_PREVIEW[key]) {
     const [tab, lab] = PU_PREVIEW[key];
     if (key === 'milk') g.drawImage(ART.bottle, 44, 17, 44, 56);
@@ -3476,7 +3478,7 @@ function drawOrb(g, typ, x, y, r) {
   g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 1.5; g.stroke();
   g.save(); g.translate(x, y); const s = r / 15;
   if (typ === 'magnet') { g.lineCap = 'butt'; g.strokeStyle = '#d8283a'; g.lineWidth = 5 * s; g.beginPath(); g.arc(0, -1 * s, 6 * s, Math.PI, 0); g.lineTo(6 * s, 6 * s); g.moveTo(-6 * s, -1 * s); g.lineTo(-6 * s, 6 * s); g.stroke(); g.fillStyle = '#dfe4ea'; g.fillRect(-8.5 * s, 4 * s, 5 * s, 4 * s); g.fillRect(3.5 * s, 4 * s, 5 * s, 4 * s); }
-  else if (typ === 'double') { g.fillStyle = '#1f6a2a'; g.font = `800 ${13 * s}px sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('x2', 0, 1 * s); }
+  else if (typ === 'double') { g.fillStyle = '#1f6a2a'; g.font = `800 ${13 * s}px sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; const xm = DOUBLE_LV[SAVE.double].x; g.font = `800 ${(xm > 9 ? 11 : 13) * s}px sans-serif`; g.fillText('x' + xm, 0, 1 * s); }
   else if (typ === 'dash') { g.fillStyle = '#ff9a1a'; g.beginPath(); g.moveTo(2 * s, -10 * s); g.lineTo(-6 * s, 2 * s); g.lineTo(0, 2 * s); g.lineTo(-3 * s, 10 * s); g.lineTo(7 * s, -3 * s); g.lineTo(1 * s, -3 * s); g.closePath(); g.fill(); }
   else if (typ === 'mtime') {                     // v12: missile + clock = Missile Time
     g.strokeStyle = '#2f3a52'; g.lineWidth = 1.6 * s; g.beginPath(); g.arc(0, 0, 10 * s, -Math.PI / 2, Math.PI); g.stroke();
@@ -3800,9 +3802,9 @@ function drawHUD2(font, L, T) {
   if (S.combo >= 5) {                              // v4 combo meter
     const cy = T + 170, m = comboMult(), pulse = 1 + .06 * Math.sin(vt * 12);
     ctx.save(); ctx.translate(L, cy); ctx.scale(pulse, pulse); ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.font = `800 16px ${font}`; ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(20,14,30,.75)'; const txt = `COMBO ${S.combo}` + (m > 1 ? `  \u00d7${m}` : '');
+    ctx.font = `800 16px ${font}`; ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(20,14,30,.75)'; const txt = `COMBO ${S.combo}` + (m > 1 ? `  \u00d7${m}` : '') + (S.comboCap ? `  (max \u00d7${1 + (4 + S.comboCap) * .5})` : '');
     ctx.strokeText(txt, 0, 0); ctx.fillStyle = m >= 2.5 ? '#ff7ab6' : m >= 2 ? '#ffb347' : '#ffd25e'; ctx.fillText(txt, 0, 0);
-    ctx.fillStyle = 'rgba(255,245,223,.25)'; ctx.fillRect(0, 12, 110, 3); ctx.fillStyle = '#ffd25e'; ctx.fillRect(0, 12, 110 * clamp(S.comboT / 2.5, 0, 1), 3);
+    ctx.fillStyle = 'rgba(255,245,223,.25)'; ctx.fillRect(0, 12, 110, 3); ctx.fillStyle = '#ffd25e'; ctx.fillRect(0, 12, 110 * clamp(S.comboT / comboWin(), 0, 1), 3);
     ctx.restore();
   }
   // shield charges under the hearts
