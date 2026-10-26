@@ -141,6 +141,26 @@ h2{font-size:clamp(32px,9vh,54px);line-height:1}
 .missions span.done{border-color:var(--gold);color:var(--gold)}
 @keyframes cardFlash{0%{box-shadow:0 0 0 3px var(--gold),0 0 26px rgba(243,194,90,.7)}100%{box-shadow:0 0 0 0 transparent}}
 .card.flash{animation:cardFlash .9s ease-out}
+/* v23: player name + leaderboard sheets */
+.sheet{position:absolute;inset:0;z-index:30;display:grid;place-items:center;background:rgba(6,10,18,.66);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);padding:10px 16px}
+.sheet[hidden]{display:none}
+.sheet .sh-box{position:relative;width:min(700px,100%);max-height:100%;overflow:auto;padding:14px 18px 16px;border-radius:18px;background:rgba(18,26,42,.95);border:1.5px solid rgba(255,245,223,.25);color:var(--cream);text-align:center}
+.sheet h3{margin:0 0 2px;font-family:var(--font-display);font-weight:400;font-size:24px}
+.sheet .sh-sub{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--cream-dim)}
+.sheet .sh-x{position:absolute;top:8px;right:10px;width:30px;height:30px;border-radius:50%;border:0;background:rgba(255,245,223,.12);color:var(--cream);font-size:18px;cursor:pointer}
+.lb-cols{display:grid;grid-template-columns:1fr 1fr;gap:0 18px;text-align:left}
+.lb-row{display:grid;grid-template-columns:26px 1fr auto;gap:8px;align-items:center;padding:3px 8px;border-radius:8px;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.lb-row:nth-child(odd){background:rgba(255,245,223,.05)}
+.lb-row .rk{color:var(--cream-dim);text-align:right}
+.lb-row:nth-child(-n+3) .rk{color:var(--gold)}
+.lb-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lb-row .sc{color:var(--gold)}
+.lb-row.me{background:rgba(247,210,122,.22)!important;outline:1px solid rgba(247,210,122,.6)}
+.lb-empty{grid-column:1/-1;text-align:center;padding:18px 0;color:var(--cream-dim);font-weight:600}
+.lb-note{margin:8px 0 0;font-size:11px;font-weight:600;color:var(--cream-dim)}
+#nameIn{width:min(280px,80vw);margin:6px 0 12px;padding:10px 14px;border-radius:12px;border:1.5px solid rgba(255,245,223,.35);background:rgba(255,255,255,.08);color:var(--cream);font:700 17px var(--font-ui);text-align:center;outline:none}
+#nameIn:focus{border-color:var(--gold)}
+.namechip{margin-right:8px;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,245,223,.35);background:rgba(255,245,223,.08);color:var(--cream);font:700 12px var(--font-ui);cursor:pointer}
 /* v21: pet details sheet */
 .card[data-key="pet"] canvas{cursor:pointer}
 #petInfo{position:absolute;inset:0;z-index:5;display:grid;place-items:center;background:rgba(6,10,18,.62);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);padding:12px 16px}
@@ -183,8 +203,8 @@ h2{font-size:clamp(32px,9vh,54px);line-height:1}
       <span><b>Blueberry</b> = shield &middot; <b>Milk</b> = +1 heart</span>
       <span><b>Boss</b> every 40 s &middot; Mason shoots on his own</span>
     </div>
-    <div class="row"><button class="btn primary" id="btnStart" disabled>Loading…</button><button class="btn" id="btnShopT">Workshop</button></div>
-    <p class="lead" id="bestLine"></p>
+    <div class="row"><button class="btn primary" id="btnStart" disabled>Loading…</button><button class="btn" id="btnShopT">Workshop</button><button class="btn" id="btnLbT">Leaderboard</button></div>
+    <p class="lead"><button class="namechip" id="btnName" type="button"></button><span id="bestLine"></span></p>
     <div class="missions" id="titleMissions"></div>
   </section>
 
@@ -215,9 +235,23 @@ h2{font-size:clamp(32px,9vh,54px);line-height:1}
     <div class="row">
       <button class="btn primary" id="btnRestart">Restart</button>
       <button class="btn" id="btnShopO">Workshop</button>
+      <button class="btn" id="btnLbO">Leaderboard</button>
       <button class="btn" id="btnQuitO">Quit</button>
     </div>
   </section>
+
+  <div class="sheet" id="lbSheet" hidden><div class="sh-box">
+    <button class="sh-x" id="lbClose" type="button" aria-label="Close">&times;</button>
+    <h3>Leaderboard</h3><p class="sh-sub" id="lbSub">Top 20 best scores</p>
+    <div class="lb-cols" id="lbList"></div>
+    <p class="lb-note" id="lbNote"></p>
+  </div></div>
+  <div class="sheet" id="nameSheet" hidden><div class="sh-box" style="width:min(420px,100%)">
+    <button class="sh-x" id="nameClose" type="button" aria-label="Close">&times;</button>
+    <h3>Your Name</h3><p class="sh-sub">Shown on the leaderboard</p>
+    <input id="nameIn" type="text" maxlength="14" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="Enter a name" enterkeyhint="done">
+    <div class="row"><button class="btn primary" id="nameSave" type="button">Save</button></div>
+  </div></div>
 
   <section class="screen veil" id="scrWheel" hidden>
     <div class="wheel-wrap"><canvas id="wheel" width="600" height="600"></canvas><div class="wheel-ptr"></div></div>
@@ -363,7 +397,7 @@ const distReward = i => i < DIST_RW.length ? DIST_RW[i] : 500 + 100 * (i - DIST_
 if (SAVE.triJump && SAVE.dblJump) SAVE.dblJump = 2;                  // v17: old saves with both unlocks -> jump level 2
 for (const [k, t] of [['dblJump', JUMP_LV], ['magnet', MAGNET_LV], ['double', DOUBLE_LV], ['dash', DASH_LV], ['rocket', ROCKET_LV], ['mtime', MTIME_LV], ['bomb', BOMB_LV], ['milk', MILK_LV], ['chest', CHEST_LV], ['pet', PETS], ['sdash', SDASH_LV], ['triJump', TRI_LV]]) SAVE[k] = clampLvl(SAVE[k], t);
 SAVE.triJump = SAVE.dblJump >= 2 ? 1 : 0;
-SAVE.milk = 0;   // v18: Milk removed from the Workshop, always base level
+SAVE.milk = 0; persist();   // v18: Milk removed from the Workshop, always base level (v23: written back so old saves are cleaned)
 // v4: missions (progress carries across runs, like daily tasks)
 const MISSIONS = {
   coins: { text: n => `Collect ${n} coins`, n: [40, 90, 160], reward: [30, 60, 110] },
@@ -1434,7 +1468,7 @@ function step() {
       const pts = Math.round(100 * m * before); coinSound(S.combo); S.coins += m; S.score += pts; floatText('+' + pts, [255, 215, 0]); burst(cx, cy, 'gold'); missionAdd('coins', m);
       if (comboMult() > before) queueBanner('Combo \u00d7' + comboMult(), S.combo + ' coins in a row', [255, 190, 90], 1.2);
     }
-    else if (c.typ === 'bottle') { const n = MILK_LV[SAVE.milk].n; sfx('love'); S.hp = Math.min(MAX_HP, S.hp + n); floatText('+' + n, [255, 40, 40]); burst(cx, cy, 'pink'); }
+    else if (c.typ === 'bottle') { const n = 1;   /* v23: milk always restores exactly 1 heart, whatever an old save says */ sfx('love'); S.hp = Math.min(MAX_HP, S.hp + n); floatText('+' + n, [255, 40, 40]); burst(cx, cy, 'pink'); }
     else if (c.typ === 'blueberry') { sfx('shield'); P.shield = SHIELDS[SAVE.shield].hits; floatText('+1', [160, 0, 220]); burst(cx, cy, 'violet'); }
   }
   S.score += trunc(S.speed * dt * 0.1);
@@ -2055,7 +2089,7 @@ addEventListener('keyup', e => {
 function show(id, on) { $(id).hidden = !on; }
 let wakeLock = null;
 async function lockWake() { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (e) { } }
-function startGame() {
+function startGame() { closeLb();
   if (audioCtx && audioCtx.state !== 'running') audioCtx.resume();
   resetGame(); state = 'play'; accum = 0;
   if (S.pu.boost > 0) { queueBanner('Start Dash!', 'Invincible \u00b7 x10 speed \u00b7 every coin is yours', [255, 190, 90], 1.8); synth('rocketGo'); }
@@ -2069,7 +2103,7 @@ function pauseGame() {
   show('scrPause', true); show('controls', false);
 }
 function resumeGame() { if (state !== 'pause') return; state = 'play'; accum = 0; last = performance.now(); show('scrPause', false); show('controls', true); }
-function quitGame() { state = 'title'; resetGame(); show('scrPause', false); show('scrOver', false); show('scrShop', false); show('controls', false); show('scrTitle', true); updateBest(); }
+function quitGame() { closeLb(); state = 'title'; resetGame(); show('scrPause', false); show('scrOver', false); show('scrShop', false); show('controls', false); show('scrTitle', true); updateBest(); }
 const REVIVE_COST = [60, 180, 450];
 let reviveT = 0;
 function gameOver() {                     // v4: offer a revive (paid with coins) before ending the run
@@ -2110,9 +2144,87 @@ function finishGameOver() {
   $('ovMissions').innerHTML = SAVE.missions.map(m => `<span class="${m.done ? 'done' : ''}">${missionLabel(m)}</span>`).join('');
   refillMissions();
   show('controls', false); show('scrOver', true);
+  lbSubmit(S.score, S.stage, dm).then(() => openLb(true));   // v23: post the run, then show the top 20
+}
+// ---------------- v23: player name + top-20 leaderboard ----------------
+// Online (published artifact): shared db, one document per player (board/<their id>) holding their best run.
+// Offline (standalone file, or no db in this view): a local board in this browser, one entry per name.
+const LB = { db: null, uid: null, rows: [], mine: null, online: false, ro: false, err: '', chain: Promise.resolve(), ready: null };
+function playerName() { try { return localStorage.getItem('cm-name') || ''; } catch (e) { return ''; } }
+function cleanName(v) { return String(v || '').replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 14); }
+let nameAfter = null;
+function openNameSheet(after) { nameAfter = after || null; $('nameIn').value = playerName(); $('nameSheet').hidden = false; setTimeout(() => { try { $('nameIn').focus(); } catch (e) { } }, 50); }
+function closeNameSheet() { $('nameSheet').hidden = true; try { $('nameIn').blur(); } catch (e) { } const f = nameAfter; nameAfter = null; if (f && playerName()) f(); }
+function saveNameSheet() {
+  const n = cleanName($('nameIn').value); if (!n) { $('nameIn').focus(); return; }
+  try { localStorage.setItem('cm-name', n); } catch (e) { }
+  updateBest();
+  if (LB.online && LB.mine && LB.mine.name !== n && !LB.ro) lbWrite(Object.assign({}, LB.mine, { name: n }));   // rename on the board too
+  closeNameSheet();
+}
+function lbLocal() { try { const a = JSON.parse(localStorage.getItem('cm-board') || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+function lbWrite(doc) {
+  LB.chain = LB.chain.then(async () => {
+    try { await LB.db.doc('board/' + LB.uid).set(doc); LB.mine = doc; }
+    catch (e) { if (e && (e.code === 'invalid_argument' || e.code === 'not_granted')) LB.ro = true; else LB.err = 'Could not save your score right now.'; }
+  });
+  return LB.chain;
+}
+LB.ready = (async () => {
+  try {
+    if (!window.claude || !window.claude.use) return;
+    const [db, user] = await Promise.all([window.claude.use('db'), window.claude.use('user')]);
+    if (!db || !user) return;
+    const uid = await user.id(); if (!uid) return;
+    LB.db = db; LB.uid = uid; LB.online = true;
+    if (typeof user.can === 'function') { try { if (await user.can('data.write') === false) LB.ro = true; } catch (e) { } }
+    try { const me = await db.doc('board/' + uid).get(); if (me.exists) LB.mine = me.data(); } catch (e) { }
+    db.collection('board').orderBy('best', 'desc').limit(20).onSnapshot(snap => {
+      LB.rows = snap.docs.map(d => Object.assign({ id: d.id }, d.data())); if (!$('lbSheet').hidden) renderLb();
+    }, () => { LB.err = 'The leaderboard is offline right now.'; if (!$('lbSheet').hidden) renderLb(); });
+  } catch (e) { }
+})();
+async function lbSubmit(score, stage, dist) {
+  const name = playerName() || 'Player';
+  try { await Promise.race([LB.ready, new Promise(r => setTimeout(r, 1500))]); } catch (e) { }
+  if (LB.online) {
+    if (LB.ro || score <= 0) return;
+    if (!LB.mine || score > (+LB.mine.best || 0)) await lbWrite({ name, best: score, stage, dist, t: Date.now() });
+    else if (LB.mine.name !== name) await lbWrite(Object.assign({}, LB.mine, { name }));
+    return;
+  }
+  if (score <= 0) return;
+  const a = lbLocal(), i = a.findIndex(r => r.name === name);
+  if (i < 0) a.push({ name, best: score, stage, dist, t: Date.now() }); else if (score > a[i].best) a[i] = { name, best: score, stage, dist, t: Date.now() };
+  a.sort((x, y) => y.best - x.best);
+  try { localStorage.setItem('cm-board', JSON.stringify(a.slice(0, 50))); } catch (e) { }
+}
+function openLb(afterRun) { LB.afterRun = !!afterRun; renderLb(); $('lbSheet').hidden = false; }
+function closeLb() { $('lbSheet').hidden = true; }
+function renderLb() {
+  const online = LB.online, me = playerName() || 'Player';
+  const rows = (online ? LB.rows : lbLocal()).filter(r => r && Number.isFinite(+r.best)).slice(0, 20);
+  const list = $('lbList'); list.textContent = '';
+  const isMe = r => online ? r.id === LB.uid : r.name === me;
+  if (!rows.length) { const d = document.createElement('div'); d.className = 'lb-empty'; d.textContent = 'No scores yet. Finish a run to be the first!'; list.appendChild(d); }
+  const half = 10;   // two columns of ten
+  const colA = document.createElement('div'), colB = document.createElement('div');
+  rows.forEach((r, i) => {
+    const row = document.createElement('div'); row.className = 'lb-row' + (isMe(r) ? ' me' : '');
+    const rk = document.createElement('span'); rk.className = 'rk'; rk.textContent = (i + 1);
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = cleanName(r.name) || 'Player';
+    const sc = document.createElement('span'); sc.className = 'sc'; sc.textContent = Math.floor(+r.best).toLocaleString();
+    row.append(rk, nm, sc); (i < half ? colA : colB).appendChild(row);
+  });
+  if (rows.length) list.append(colA, colB);
+  const myIdx = rows.findIndex(isMe), myBest = online ? (LB.mine ? +LB.mine.best : 0) : ((lbLocal().find(r => r.name === me) || {}).best || 0);
+  $('lbSub').textContent = (LB.afterRun ? 'Your run: ' + (S.score || 0).toLocaleString() + ' \u00b7 ' : '') +
+    (myIdx >= 0 ? 'You are #' + (myIdx + 1) : myBest ? 'Your best ' + myBest.toLocaleString() + ' \u00b7 not in the top 20 yet' : 'Top 20 best scores');
+  $('lbNote').textContent = LB.err || (online ? (LB.ro ? 'This link is view-only, so your scores are not saved here.' : 'Everyone who plays this page shares this board.') : 'Scores on this device. Open the online version to compete with everyone.');
 }
 let bestDist = (() => { try { return +localStorage.getItem('cm-bestdist') || 0; } catch (e) { return 0; } })();
 function updateBest() {
+  $('btnName').textContent = '\u270E ' + (playerName() || 'Set name');
   $('titleMissions').innerHTML = SAVE.missions.map(m => `<span class="${m.done ? 'done' : ''}">${missionLabel(m)}</span>`).join(''); $('bestLine').textContent = (best ? 'Best score ' + best.toLocaleString() + ' \u00b7 ' : '') + 'Bank ' + SAVE.bank.toLocaleString() + ' coins'; }
 
 // ---------------- v4: Lucky Wheel after each boss ----------------
@@ -2184,7 +2296,7 @@ function closeWheel() {
 
 // ---------------- v2: Workshop ----------------
 let shopFrom = 'title';
-function openShop(from) { shopFrom = from; state = 'shop'; show('scrTitle', false); show('scrOver', false); show('scrRevive', false); show('scrWheel', false); show('scrShop', true); renderShop(); }
+function openShop(from) { closeLb(); shopFrom = from; state = 'shop'; show('scrTitle', false); show('scrOver', false); show('scrRevive', false); show('scrWheel', false); show('scrShop', true); renderShop(); }
 function closeShop() { closePetInfo(); show('scrShop', false); if (shopFrom === 'over') { state = 'over'; show('scrOver', true); } else { state = 'title'; resetGame(); show('scrTitle', true); updateBest(); } }
 const SHOP = [
   { key: 'pet', label: 'Pet', table: PETS, eff: petEff },
@@ -2307,7 +2419,7 @@ let toastT = 0;
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 1600); }
 async function reloadPhoto() { const ok = await loadChild(true); toast(ok ? 'Photo reloaded' : 'Could not load the photo'); }
 
-$('btnStart').addEventListener('click', startGame);
+$('btnStart').addEventListener('click', () => { if (!playerName()) openNameSheet(startGame); else startGame(); });
 // v12: iOS drops the synthesized "click" when another finger is on a pad or the finger slides a little,
 // so the pause button reacts on touch-down directly (click stays as the mouse fallback)
 $('btnPause').addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); pauseGame(); });
@@ -2332,7 +2444,15 @@ $('btnMusic').addEventListener('click', () => { MUSIC.on = !MUSIC.on; try { loca
 musicLabel();
 $('btnQuitP').addEventListener('click', quitGame);
 $('btnQuitO').addEventListener('click', quitGame);
-$('btnRestart').addEventListener('click', startGame);
+$('btnRestart').addEventListener('click', () => { closeLb(); startGame(); });
+$('btnLbT').addEventListener('click', () => openLb(false));
+$('btnLbO').addEventListener('click', () => openLb(false));
+$('lbClose').addEventListener('click', closeLb);
+$('lbSheet').addEventListener('click', e => { if (e.target.id === 'lbSheet') closeLb(); });
+$('btnName').addEventListener('click', () => openNameSheet());
+$('nameClose').addEventListener('click', closeNameSheet);
+$('nameSave').addEventListener('click', saveNameSheet);
+$('nameIn').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); saveNameSheet(); } });
 $('btnShopT').addEventListener('click', () => openShop('title'));
 $('btnShopO').addEventListener('click', () => openShop('over'));
 $('btnShopPlay').addEventListener('click', startGame);
