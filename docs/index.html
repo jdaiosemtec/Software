@@ -246,6 +246,10 @@ h2{font-size:clamp(32px,9vh,54px);line-height:1}
     <div class="lb-cols" id="lbList"></div>
     <p class="lb-note" id="lbNote"></p>
   </div></div>
+  <div class="sheet" id="giftSheet" hidden><div class="sh-box" style="width:min(420px,100%)">
+    <p class="eyebrow">Gift</p><h3 id="giftTitle">Coins received!</h3><p class="sh-sub" id="giftMsg"></p>
+    <div class="row"><button class="btn primary" id="giftOk" type="button">Collect</button></div>
+  </div></div>
   <div class="sheet" id="nameSheet" hidden><div class="sh-box" style="width:min(420px,100%)">
     <button class="sh-x" id="nameClose" type="button" aria-label="Close">&times;</button>
     <h3>Your Name</h3><p class="sh-sub">Shown on the leaderboard</p>
@@ -2144,7 +2148,8 @@ function finishGameOver() {
   $('ovMissions').innerHTML = SAVE.missions.map(m => `<span class="${m.done ? 'done' : ''}">${missionLabel(m)}</span>`).join('');
   refillMissions();
   show('controls', false); show('scrOver', true);
-  lbSubmit(S.score, S.stage, dm).then(() => openLb(true));   // v23: post the run, then show the top 20
+  lbSubmit(S.score, S.stage, dm).then(() => openLb(true));
+  checkGifts();   // v23: post the run, then show the top 20
 }
 // ---------------- v23: player name + top-20 leaderboard ----------------
 // Online (published artifact): shared db, one document per player (board/<their id>) holding their best run.
@@ -2158,7 +2163,7 @@ function closeNameSheet() { $('nameSheet').hidden = true; try { $('nameIn').blur
 function saveNameSheet() {
   const n = cleanName($('nameIn').value); if (!n) { $('nameIn').focus(); return; }
   try { localStorage.setItem('cm-name', n); } catch (e) { }
-  updateBest();
+  updateBest(); checkGifts();
   if (LB.online && LB.mine && LB.mine.name !== n && !LB.ro) lbWrite(Object.assign({}, LB.mine, { name: n }));   // rename on the board too
   closeNameSheet();
 }
@@ -2198,6 +2203,30 @@ async function lbSubmit(score, stage, dist) {
   if (i < 0) a.push({ name, best: score, stage, dist, t: Date.now() }); else if (score > a[i].best) a[i] = { name, best: score, stage, dist, t: Date.now() };
   a.sort((x, y) => y.best - x.best);
   try { localStorage.setItem('cm-board', JSON.stringify(a.slice(0, 50))); } catch (e) { }
+}
+// v24: coin gifts sent by the owner (gifts/<id> = {name, coins, note}); each gift is collected once per player
+let giftQueue = [], giftBusy = false;
+async function checkGifts() {
+  if (giftBusy) return; giftBusy = true;   // one check at a time, so a gift can never be paid twice
+  try {
+    await LB.ready; if (!LB.online) return;
+    const name = playerName(); if (!name) return;
+    let claimed = []; try { claimed = JSON.parse(localStorage.getItem('cm-gifts') || '[]'); } catch (e) { }
+    let remote = null; try { const c = await LB.db.doc('claims/' + LB.uid).get(); remote = c.exists ? c.data() : null; } catch (e) { }
+    if (remote && Array.isArray(remote.ids)) claimed = Array.from(new Set(claimed.concat(remote.ids)));
+    const snap = await LB.db.collection('gifts').where('name', '==', name).get();
+    const fresh = snap.docs.filter(d => !claimed.includes(d.id) && Number.isFinite(+d.data().coins) && +d.data().coins > 0);
+    if (!fresh.length) return;
+    let total = 0; const notes = [];
+    for (const d of fresh) { total += Math.floor(+d.data().coins); claimed.push(d.id); if (d.data().note) notes.push(String(d.data().note).slice(0, 80)); }
+    try { localStorage.setItem('cm-gifts', JSON.stringify(claimed)); } catch (e) { }   // mark collected first, then pay
+    SAVE.bank += total; persist();
+    try { await LB.db.doc('claims/' + LB.uid).set({ ids: claimed }); } catch (e) { }
+    if (state === 'title') updateBest(); if (state === 'shop') $('bank').textContent = SAVE.bank.toLocaleString();
+    $('giftTitle').textContent = '+' + total.toLocaleString() + ' coins';
+    $('giftMsg').textContent = (notes.length ? notes.join(' \u00b7 ') + ' \u00b7 ' : '') + 'Added to your bank: ' + SAVE.bank.toLocaleString() + ' coins';
+    $('giftSheet').hidden = false; synth('chest');
+  } catch (e) { } finally { giftBusy = false; }
 }
 function openLb(afterRun) { LB.afterRun = !!afterRun; renderLb(); $('lbSheet').hidden = false; }
 function closeLb() { $('lbSheet').hidden = true; }
@@ -2446,6 +2475,8 @@ $('btnQuitP').addEventListener('click', quitGame);
 $('btnQuitO').addEventListener('click', quitGame);
 $('btnRestart').addEventListener('click', () => { closeLb(); startGame(); });
 $('btnLbT').addEventListener('click', () => openLb(false));
+$('giftOk').addEventListener('click', () => { $('giftSheet').hidden = true; });
+checkGifts();
 $('btnLbO').addEventListener('click', () => openLb(false));
 $('lbClose').addEventListener('click', closeLb);
 $('lbSheet').addEventListener('click', e => { if (e.target.id === 'lbSheet') closeLb(); });
