@@ -248,11 +248,9 @@ let MAX_HP = 5;                 // runner.py max_hp = 5; now set by the ride (Ki
 let LW = 900;                   // SCREEN_W (widened to fill wide phones)
 
 // ---------------- Workshop upgrade tables ----------------
-const SHIELDS = [               // blueberry shield: hits it absorbs (level 1 = original runner.py behaviour); v9: +1 at levels 3, 6, 9 and 10
-  { name: 'Berry Bubble', hits: 1 }, { name: 'Twin Bubble', hits: 1, price: 40 }, { name: 'Triple Bubble', hits: 2, price: 90 },
-  { name: 'Crystal Dome', hits: 2, price: 160 }, { name: 'Aurora Dome', hits: 2, price: 250 }, { name: 'Prism Dome', hits: 3, price: 360 },
-  { name: 'Star Shell', hits: 3, price: 500 }, { name: 'Comet Shell', hits: 3, price: 680 }, { name: 'Galaxy Shell', hits: 4, price: 900 },
-  { name: 'Infinity Shell', hits: 5, price: 1200 }];
+const SHIELDS = [               // v18: base + 2 upgrades, 3000 coins each (max 3 hits)
+  { name: 'Berry Bubble', hits: 1 }, { name: 'Twin Bubble', hits: 2, price: 3000 },
+  { name: 'Crystal Dome', hits: 3, price: 3000 }];
 // ride: max hearts; geo = drawing (0 photo scooter, 1 bike, 2 moped, 3 kart, 4 board); pal = colours
 const MOUNTS = [
   { name: 'Kick Scooter', hp: 5, geo: 0 },
@@ -322,13 +320,23 @@ function petEff(L) {
   return a.join(' \u00b7 ');
 }
 // v16: every Workshop price doubled (applied once, after all the tables and the 1.5x rule are built)
-for (const tb of [SHIELDS, MOUNTS, WEAPONS, MAGNET_LV, DOUBLE_LV, DASH_LV, ROCKET_LV, MTIME_LV, BOMB_LV, MILK_LV, CHEST_LV, DBL_LV, TRI_LV, PETS, SDASH_LV]) for (const it of tb) if (it.price) it.price *= 2;
+for (const tb of [MOUNTS, WEAPONS, MAGNET_LV, DOUBLE_LV, DASH_LV, ROCKET_LV, MTIME_LV, BOMB_LV, MILK_LV, CHEST_LV, DBL_LV, TRI_LV, PETS, SDASH_LV]) for (const it of tb) if (it.price) it.price *= 2;
+// v20: Pet and Ride prices x1.5 (rounded to 5)
+for (const tb of [PETS, MOUNTS]) for (const it of tb) if (it.price) it.price = Math.round(it.price * 1.5 / 5) * 5;
+// v21: Weapon prices x3; Pet and Ride prices x1.5 again (rounded to 5)
+for (const it of WEAPONS) if (it.price) it.price *= 3;
+for (const tb of [PETS, MOUNTS]) for (const it of tb) if (it.price) it.price = Math.round(it.price * 1.5 / 5) * 5;
+// v17: triple jump is the second upgrade of the jump card (level 1 = double jump, level 2 = triple jump)
+const JUMP_LV = [{ name: 'Single Jump' }, { name: 'Double Jump', price: DBL_LV[1].price }, { name: 'Triple Jump', price: TRI_LV[1].price }];
 // v13: distance rewards (40 px = 1 m)
 const PX_PER_M = 40;
 const DIST_MS = [250, 500, 1000, 1500, 2000, 3000, 4000, 5000], DIST_RW = [20, 40, 80, 120, 160, 250, 350, 500];
 const distMilestone = i => i < DIST_MS.length ? DIST_MS[i] : 5000 + 1500 * (i - DIST_MS.length + 1);
 const distReward = i => i < DIST_RW.length ? DIST_RW[i] : 500 + 100 * (i - DIST_RW.length + 1);   // v10: double jump is a one-time Workshop unlock
-for (const [k, t] of [['dblJump', DBL_LV], ['magnet', MAGNET_LV], ['double', DOUBLE_LV], ['dash', DASH_LV], ['rocket', ROCKET_LV], ['mtime', MTIME_LV], ['bomb', BOMB_LV], ['milk', MILK_LV], ['chest', CHEST_LV], ['pet', PETS], ['sdash', SDASH_LV], ['triJump', TRI_LV]]) SAVE[k] = clampLvl(SAVE[k], t);
+if (SAVE.triJump && SAVE.dblJump) SAVE.dblJump = 2;                  // v17: old saves with both unlocks -> jump level 2
+for (const [k, t] of [['dblJump', JUMP_LV], ['magnet', MAGNET_LV], ['double', DOUBLE_LV], ['dash', DASH_LV], ['rocket', ROCKET_LV], ['mtime', MTIME_LV], ['bomb', BOMB_LV], ['milk', MILK_LV], ['chest', CHEST_LV], ['pet', PETS], ['sdash', SDASH_LV], ['triJump', TRI_LV]]) SAVE[k] = clampLvl(SAVE[k], t);
+SAVE.triJump = SAVE.dblJump >= 2 ? 1 : 0;
+SAVE.milk = 0;   // v18: Milk removed from the Workshop, always base level
 // v4: missions (progress carries across runs, like daily tasks)
 const MISSIONS = {
   coins: { text: n => `Collect ${n} coins`, n: [40, 90, 160], reward: [30, 60, 110] },
@@ -1833,7 +1841,7 @@ function boom(x, y, z = 1) {
 // v11: boss difficulty per level (stage). Everything grows a step every boss.
 function bossSpec(lv) {
   return {
-    hp: Math.round(54 * Math.pow(1.55, lv - 1)),                 // v13: +35% HP (about 20 s with a same-level weapon)
+    hp: Math.round(70 * Math.pow(1.55, lv - 1)),                 // v19: HP x1.3 of v18 (54 -> 70, about 26 s with a same-level weapon)
     interval: Math.max(.5, 1.9 - .2 * (lv - 1)),                 // pause between attacks (s) - v13: sooner
     speed: Math.min(820, 360 + 48 * (lv - 1)),                   // attack speed (px/s)
     gap: Math.max(.38, .62 - .04 * (lv - 1)),                    // spacing inside a combo (s)
@@ -1939,6 +1947,9 @@ function endBoss(win) {
     queueBanner('Boss Defeated!', '+' + reward + ' coins \u00b7 +1 heart', [255, 214, 90], 2.4);
     for (let i = 0; i < 30; i++) part({ x: b.x, y: b.y, vx: uni(-260, 160), vy: uni(-360, -120), ay: 700, life: 1.2, max: 1.2, size: 5, col: [255, 214, 90], add: false, shape: 'coin', scroll: false });
     missionAdd('boss');
+    const nm = ri(2, 6), [bw, bh] = COLLECT_SIZE.bottle;   // v19: every boss drops 2-6 milk bottles, laid out at running height just ahead
+    for (let i = 0; i < nm; i++) S.collects.push({ typ: 'bottle', x: LW + 80 + i * 70, y: GROUND_Y - PH + 34 - Math.round(Math.sin(i / Math.max(1, nm - 1) * Math.PI) * 18), w: bw, h: bh, angle: 0, glint: 0 });
+    queueBanner('Milk Drop!', nm + ' bottles ahead', [255, 170, 200], 1.8);
     openWheel(); return;                       // v4: lucky wheel, next stage starts after it
   }
   nextStage();
@@ -2032,7 +2043,7 @@ function pauseGame() {
 }
 function resumeGame() { if (state !== 'pause') return; state = 'play'; accum = 0; last = performance.now(); show('scrPause', false); show('controls', true); }
 function quitGame() { state = 'title'; resetGame(); show('scrPause', false); show('scrOver', false); show('scrShop', false); show('controls', false); show('scrTitle', true); updateBest(); }
-const REVIVE_COST = [60, 120, 180];
+const REVIVE_COST = [60, 180, 450];
 let reviveT = 0;
 function gameOver() {                     // v4: offer a revive (paid with coins) before ending the run
   if (petStats(SAVE.pet).revive && S.pet && !S.pet.revived) { S.pet.revived = true; freeRevive(); return; }   // v13: Star Sprite saves Mason once
@@ -2159,10 +2170,8 @@ const SHOP = [
   { key: 'rocket', label: 'Rocket', table: ROCKET_LV, eff: l => `Rocket flight lasts ${ROCKET_LV[l].t} s` },
   { key: 'mtime', label: 'Missile Time', table: MTIME_LV, eff: l => `Missiles reload 2\u00d7 faster for ${MTIME_LV[l].t} s` },
   { key: 'bomb', label: 'Coin Bomb', table: BOMB_LV, eff: l => `${BOMB_LV[l].n} coins per obstacle` },
-  { key: 'milk', label: 'Milk', table: MILK_LV, eff: l => `Milk restores ${MILK_LV[l].n} heart${MILK_LV[l].n > 1 ? 's' : ''}` },
   { key: 'chest', label: 'Treasure Chest', table: CHEST_LV, eff: l => `Chest coins \u00d7${CHEST_LV[l].m}` },
-  { key: 'dblJump', label: 'Double Jump', table: DBL_LV, eff: l => l ? 'Tap jump again in the air' : 'Unlock: tap jump again in the air' },
-  { key: 'triJump', label: 'Triple Jump', table: TRI_LV, needs: 'dblJump', eff: l => l ? 'After the double-jump flip, tap again to dash forward' : 'Unlock: dash forward after the double-jump flip (needs Double Jump)' }];
+  { key: 'dblJump', label: 'Jump', table: JUMP_LV, eff: l => ['Unlock double jump: tap again in the air', 'Double jump: tap again in the air', 'Triple jump: after the double-jump flip, tap again to dash forward'][l] }];
 function renderShop() {             // v12: cards are built once; an upgrade refreshes only its own card in place (no rebuild = no scroll jump)
   $('bank').textContent = SAVE.bank.toLocaleString();
   const cards = $('cards'); cards.innerHTML = '';
@@ -2186,7 +2195,7 @@ function fillCard(card, it) {
 function buyUpgrade(it, card) {
   const nx = it.table[SAVE[it.key] + 1]; if (!nx || SAVE.bank < nx.price) return;
   const cards = $('cards'), sl = cards.scrollLeft;
-  SAVE.bank -= nx.price; SAVE[it.key]++; persist(); synth('chest'); PLAYER.masks = {};
+  SAVE.bank -= nx.price; SAVE[it.key]++; if (it.key === 'dblJump') SAVE.triJump = SAVE.dblJump >= 2 ? 1 : 0; persist(); synth('chest'); PLAYER.masks = {};
   $('bank').textContent = SAVE.bank.toLocaleString();
   fillCard(card, it);
   for (const b of cards.querySelectorAll('.buy[data-price]')) b.disabled = SAVE.bank < +b.dataset.price;   // other cards: only the button state changes
@@ -2198,9 +2207,9 @@ function drawShopPreview(cn, key, lvl) {
   if (box.width > 0) { cn.width = Math.round(box.width * d); cn.height = Math.round(box.height * d); }
   const g = cn.getContext('2d'), s = Math.min(cn.width / 160, cn.height / 95);
   g.setTransform(s, 0, 0, s, (cn.width - 160 * s) / 2, (cn.height - 95 * s) / 2);
-  if (key === 'triJump') {
+  if (key === 'dblJump' && lvl >= 2) {               // v17: jump card preview grows with the level
     g.strokeStyle = lvl ? '#ffd25e' : 'rgba(255,245,223,.45)'; g.lineWidth = 3; g.setLineDash([5, 5]); g.beginPath(); g.moveTo(14, 80); g.quadraticCurveTo(34, 20, 56, 50); g.quadraticCurveTo(74, 14, 96, 40); g.lineTo(150, 40); g.stroke(); g.setLineDash([]);
-    g.fillStyle = '#fff5df'; g.font = `800 15px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui')}`; g.textAlign = 'center'; g.fillText(lvl ? '1 + 1 + dash' : '10000', 84, 88); return;
+    g.fillStyle = '#fff5df'; g.font = `800 15px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui')}`; g.textAlign = 'center'; g.fillText(lvl >= 2 ? '1 + 1 + dash' : '1 + 1', 84, 88); return;
   }
   if (key === 'sdash') {
     drawOrb(g, 'boost', 62, 47, 30); g.fillStyle = '#fff5df'; g.font = `800 22px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui')}`; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(lvl ? SDASH_LV[lvl].t + 's' : 'Off', 100, 48); return;
@@ -2213,7 +2222,7 @@ function drawShopPreview(cn, key, lvl) {
     g.strokeStyle = lvl ? '#ffd25e' : 'rgba(255,245,223,.45)'; g.lineWidth = 3; g.setLineDash([5, 5]);
     g.beginPath(); g.moveTo(22, 80); g.quadraticCurveTo(52, 10, 78, 46); g.quadraticCurveTo(104, 0, 138, 70); g.stroke(); g.setLineDash([]);
     for (const [x, y] of [[22, 80], [78, 46], [138, 70]]) { g.fillStyle = '#fff5df'; g.beginPath(); g.arc(x, y, 4.5, 0, 7); g.fill(); }
-    g.fillStyle = '#fff5df'; g.font = `800 15px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui')}`; g.textAlign = 'center'; g.fillText(lvl ? '1 + 1' : '5000', 80, 90); return;
+    g.fillStyle = '#fff5df'; g.font = `800 15px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui')}`; g.textAlign = 'center'; g.fillText(lvl ? '1 + 1' : String(JUMP_LV[1].price), 80, 90); return;
   }
   const PU_PREVIEW = { magnet: [MAGNET_LV, v => v.t + 's'], double: [DOUBLE_LV, v => v.t + 's'], dash: [DASH_LV, v => v.t + 's'], rocket: [ROCKET_LV, v => v.t + 's'], mtime: [MTIME_LV, v => v.t + 's'],
     bomb: [BOMB_LV, v => '\u00d7' + v.n], milk: [MILK_LV, v => '+' + v.n], chest: [CHEST_LV, v => '\u00d7' + v.m] };
