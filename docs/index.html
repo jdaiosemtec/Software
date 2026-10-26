@@ -141,6 +141,27 @@ h2{font-size:clamp(32px,9vh,54px);line-height:1}
 .missions span.done{border-color:var(--gold);color:var(--gold)}
 @keyframes cardFlash{0%{box-shadow:0 0 0 3px var(--gold),0 0 26px rgba(243,194,90,.7)}100%{box-shadow:0 0 0 0 transparent}}
 .card.flash{animation:cardFlash .9s ease-out}
+/* v21: pet details sheet */
+.card[data-key="pet"] canvas{cursor:pointer}
+#petInfo{position:absolute;inset:0;z-index:5;display:grid;place-items:center;background:rgba(6,10,18,.62);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);padding:12px 16px}
+#petInfo[hidden]{display:none}
+#petInfo .pi-box{position:relative;display:grid;grid-template-columns:minmax(150px,200px) 1fr;gap:6px 18px;align-items:center;width:min(660px,100%);max-height:100%;overflow:auto;
+  padding:16px 18px;border-radius:18px;background:rgba(18,26,42,.94);border:1.5px solid rgba(255,245,223,.25);color:var(--cream)}
+#petInfo .pi-left{display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center}
+#petInfo .pi-pic{display:flex;align-items:center;gap:4px}
+#petInfo canvas{width:140px;height:108px}
+#petInfo .pi-nav{width:30px;height:30px;border-radius:50%;border:1px solid rgba(255,245,223,.35);background:transparent;color:var(--cream);font-size:18px;line-height:1;cursor:pointer}
+#petInfo .pi-nav:disabled{opacity:.25}
+#petInfo b{font-family:var(--font-display);font-weight:400;font-size:21px;line-height:1.1}
+#petInfo small{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--gold)}
+#petInfo small .coin-i{width:12px;height:12px;vertical-align:-2px}
+#petInfo ul{list-style:none;margin:0;padding:0;text-align:left;display:flex;flex-direction:column;gap:7px}
+#petInfo li{display:grid;grid-template-columns:22px 1fr;gap:2px 8px;align-items:start;font-size:12.5px;line-height:1.3}
+#petInfo li i{font-style:normal;font-size:15px;line-height:1.2;text-align:center}
+#petInfo li strong{font-size:13px;font-weight:800;color:var(--cream)}
+#petInfo li span{grid-column:2;color:var(--cream-dim);font-weight:600}
+#petInfo li.off{opacity:.42}
+#petInfo .pi-x{position:absolute;top:8px;right:10px;width:30px;height:30px;border-radius:50%;border:0;background:rgba(255,245,223,.12);color:var(--cream);font-size:18px;cursor:pointer}
 </style>
 
 <div id="game">
@@ -221,6 +242,12 @@ h2{font-size:clamp(32px,9vh,54px);line-height:1}
     <div class="shop-head"><h2>Workshop</h2><div class="bank"><span class="coin-i"></span><span id="bank">0</span></div></div>
     <div class="cards" id="cards"></div>
     <p class="swipe">Swipe for more upgrades &rarr;</p>
+    <div id="petInfo" hidden><div class="pi-box">
+      <button class="pi-x" id="piClose" type="button" aria-label="Close">&times;</button>
+      <div class="pi-left"><div class="pi-pic"><button class="pi-nav" id="piPrev" type="button">&lsaquo;</button><canvas id="piCv" width="240" height="180"></canvas><button class="pi-nav" id="piNext" type="button">&rsaquo;</button></div>
+        <b id="piName"></b><small id="piState"></small></div>
+      <ul id="piList"></ul>
+    </div></div>
     <div class="row"><button class="btn primary" id="btnShopPlay">Play</button><button class="btn" id="btnShopBack">Back</button></div>
   </section>
 
@@ -2158,7 +2185,7 @@ function closeWheel() {
 // ---------------- v2: Workshop ----------------
 let shopFrom = 'title';
 function openShop(from) { shopFrom = from; state = 'shop'; show('scrTitle', false); show('scrOver', false); show('scrRevive', false); show('scrWheel', false); show('scrShop', true); renderShop(); }
-function closeShop() { show('scrShop', false); if (shopFrom === 'over') { state = 'over'; show('scrOver', true); } else { state = 'title'; resetGame(); show('scrTitle', true); updateBest(); } }
+function closeShop() { closePetInfo(); show('scrShop', false); if (shopFrom === 'over') { state = 'over'; show('scrOver', true); } else { state = 'title'; resetGame(); show('scrTitle', true); updateBest(); } }
 const SHOP = [
   { key: 'pet', label: 'Pet', table: PETS, eff: petEff },
   { key: 'sdash', label: 'Start Dash', table: SDASH_LV, eff: l => l ? `Every run starts with a ${SDASH_LV[l].t} s dash: invincible, x10 speed, grabs every coin` : 'Unlock: start every run with a dash (Workshop only)' },
@@ -2191,6 +2218,37 @@ function fillCard(card, it) {
     if (it.needs && !SAVE[it.needs]) { btn.disabled = true; btn.textContent = 'Needs Double Jump'; delete btn.dataset.price; } }
   card.appendChild(btn);
   drawShopPreview(card.querySelector('canvas'), it.key, lvl);
+  if (it.key === 'pet') { card.querySelector('canvas').addEventListener('click', () => openPetInfo()); card.querySelector('.eff').addEventListener('click', () => openPetInfo()); }
+}
+// v21: tap the pet in the Workshop for a full skill sheet; arrows browse every pet on the upgrade path
+function drawInfoBadge(g) {
+  g.save(); g.fillStyle = 'rgba(255,210,94,.92)'; g.beginPath(); g.arc(146, 12, 9, 0, 7); g.fill();
+  g.fillStyle = '#1a2233'; g.font = `800 13px Georgia,serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('i', 146, 13); g.restore();
+}
+let piLvl = 1, piRaf = 0;
+const PET_SKILLS = [
+  { ic: '\u{1FA99}', name: 'Coin Magnet', from: 1, txt: s => `Pulls in every coin within ${s.pull} px of Mason.` },
+  { ic: '\u{1F6E1}\uFE0F', name: 'Guard', from: 3, txt: s => `Blocks one hit for Mason, then recharges for ${s.guard} s. A gold ring shows when it is ready.` },
+  { ic: '\u2728', name: 'Boss Shot', from: 5, txt: s => `Fires a homing shot at the boss every 1.2 s, each dealing ${(s.shoot * 100).toFixed(1)}% of the boss's max HP.` },
+  { ic: '\u{1F381}', name: 'Fetch', from: 7, txt: s => `Brings a random power-up (Magnet, Double Coins, Rocket, Missile Time or Coin Bomb) every ${s.fetch} s.` },
+  { ic: '\u{1F496}', name: 'Free Revive', from: 10, txt: () => 'Once per run, saves Mason from a game over and refills all hearts, free of charge.' }];
+function openPetInfo(l) { piLvl = l || Math.max(1, Math.min(PETS.length - 1, SAVE.pet || 1)); $('petInfo').hidden = false; fillPetInfo(); cancelAnimationFrame(piRaf); const tick = () => { if ($('petInfo').hidden) return; drawPetInfoPic(); piRaf = requestAnimationFrame(tick); }; tick(); }
+function closePetInfo() { $('petInfo').hidden = true; cancelAnimationFrame(piRaf); }
+function drawPetInfoPic() {
+  const cn = $('piCv'), box = cn.getBoundingClientRect(), d = Math.min(window.devicePixelRatio || 1, 2);
+  if (box.width > 0 && cn.width !== Math.round(box.width * d)) { cn.width = Math.round(box.width * d); cn.height = Math.round(box.height * d); }
+  const g = cn.getContext('2d'), sc = Math.min(cn.width / 150, cn.height / 115); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cn.width, cn.height);
+  g.setTransform(sc, 0, 0, sc, (cn.width - 150 * sc) / 2, (cn.height - 115 * sc) / 2);
+  const P_ = PETS[piLvl]; drawPet(g, P_.sp, 71, P_.fly ? 72 + Math.sin(vt * 3) * 3 : 98, 1.6, vt);
+}
+function fillPetInfo() {
+  const L = piLvl, P_ = PETS[L], st = petStats(L), own = SAVE.pet;
+  $('piName').textContent = P_.name;
+  $('piState').innerHTML = L === own ? 'Your current pet' : L < own ? 'Already upgraded past' : L === own + 1 ? `Next upgrade &middot; <span class="coin-i"></span> ${P_.price.toLocaleString()}` : `Upgrade path &middot; <span class="coin-i"></span> ${P_.price.toLocaleString()}`;
+  $('piList').innerHTML = PET_SKILLS.map(k => L >= k.from
+    ? `<li><i>${k.ic}</i><strong>${k.name}</strong><span>${k.txt(st)}</span></li>`
+    : `<li class="off"><i>${k.ic}</i><strong>${k.name}</strong><span>Unlocks with ${PETS[k.from].name}.</span></li>`).join('');
+  $('piPrev').disabled = L <= 1; $('piNext').disabled = L >= PETS.length - 1;
 }
 function buyUpgrade(it, card) {
   const nx = it.table[SAVE[it.key] + 1]; if (!nx || SAVE.bank < nx.price) return;
@@ -2215,8 +2273,9 @@ function drawShopPreview(cn, key, lvl) {
     drawOrb(g, 'boost', 62, 47, 30); g.fillStyle = '#fff5df'; g.font = `800 22px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui')}`; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(lvl ? SDASH_LV[lvl].t + 's' : 'Off', 100, 48); return;
   }
   if (key === 'pet') {
-    if (!lvl) { g.fillStyle = 'rgba(255,245,223,.35)'; g.font = `800 40px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui')}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('?', 80, 50); return; }
-    drawPet(g, PETS[lvl].sp, 74, PETS[lvl].fly ? 70 : 84, 2.2, vt); return;
+    if (!lvl) { g.fillStyle = 'rgba(255,245,223,.35)'; g.font = `800 40px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui')}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('?', 80, 50); drawInfoBadge(g); return; }
+    drawPet(g, PETS[lvl].sp, 76, PETS[lvl].fly ? 66 : 82, 1.45, vt);    // v21: smaller so the whole pet fits
+    drawInfoBadge(g); return;
   }
   if (key === 'dblJump') {
     g.strokeStyle = lvl ? '#ffd25e' : 'rgba(255,245,223,.45)'; g.lineWidth = 3; g.setLineDash([5, 5]);
@@ -2278,6 +2337,10 @@ $('btnShopT').addEventListener('click', () => openShop('title'));
 $('btnShopO').addEventListener('click', () => openShop('over'));
 $('btnShopPlay').addEventListener('click', startGame);
 $('btnShopBack').addEventListener('click', closeShop);
+$('piClose').addEventListener('click', closePetInfo);
+$('petInfo').addEventListener('click', e => { if (e.target.id === 'petInfo') closePetInfo(); });
+$('piPrev').addEventListener('click', () => { if (piLvl > 1) { piLvl--; fillPetInfo(); } });
+$('piNext').addEventListener('click', () => { if (piLvl < PETS.length - 1) { piLvl++; fillPetInfo(); } });
 $('btnSpin').addEventListener('click', spinWheel);
 $('btnRevive').addEventListener('click', doRevive);
 $('btnGiveUp').addEventListener('click', giveUp);
