@@ -355,7 +355,9 @@ const WEAPONS = [               // shots: angle offsets (rad) + vertical offsets
   { name: 'Galaxy Gummies', dmg: 3.86, rate: .18, speed: 600, kind: 'gummy', homing: true, shots: [{ a: -.48 }, { a: -.32 }, { a: -.16 }, { a: 0 }, { a: .16 }, { a: .32 }, { a: .48 }], price: 2000, desc: '7 homing galaxy gummies' },
   { name: 'Aurora Lances', dmg: 6.37, rate: .16, speed: 680, kind: 'lance', homing: true, shots: [{ a: -.5 }, { a: -.3 }, { a: -.1 }, { a: .1 }, { a: .3 }, { a: .5 }], price: 2500, desc: '6 homing aurora lances' },
   { name: 'Supernova Candy', dmg: 6.94, rate: .15, speed: 640, kind: 'nova', homing: true, shots: [{ a: -.56 }, { a: -.4 }, { a: -.24 }, { a: -.08 }, { a: .08 }, { a: .24 }, { a: .4 }, { a: .56 }], price: 3000, desc: '8 homing supernova candies' }];   // v26: weapons 11 + 12
-let SAVE = { bank: 0, shield: 0, mount: 0, weapon: 0, magnet: 0, double: 0, dash: 0, rocket: 0, bomb: 0, milk: 0, chest: 0, dblJump: 0, triJump: 0, mtime: 0, pet: 0, sdash: 0, v: 3 };
+let SAVE = { bank: 0, shield: 0, mount: 0, weapon: 0, magnet: 0, double: 0, dash: 0, rocket: 0, bomb: 0, milk: 0, chest: 0, dblJump: 0, triJump: 0, mtime: 0, pet: 0, sdash: 0, comp1: 0, v: 3 };
+// v35: anyone who already had a save before this version gets a one-off 18,888-coin thank-you (flag syncs with the cloud save)
+const HAD_SAVE = (() => { try { return !!(localStorage.getItem('cm-save') || localStorage.getItem('cm-best') || localStorage.getItem('cm-name')); } catch (e) { return false; } })();
 try { const s = JSON.parse(localStorage.getItem('cm-save') || '{}'); for (const k in SAVE) if (Number.isFinite(s[k])) SAVE[k] = s[k]; if (!s.v && s.mount) SAVE.mount = [0, 1, 3, 5, 7][s.mount] || 0; SAVE.v = 3; } catch (e) { }
 SAVE.shield = clampLvl(SAVE.shield, SHIELDS); SAVE.mount = clampLvl(SAVE.mount, MOUNTS); SAVE.weapon = clampLvl(SAVE.weapon, WEAPONS);
 // v4: Magnet / Double Coins duration upgrades: +1 s per level, price = half of the same-level ride price
@@ -432,7 +434,7 @@ function saveMissions() { try { localStorage.setItem('cm-missions', JSON.stringi
 function missionTarget(m) { return MISSIONS[m.id].n[m.tier]; }
 function missionLabel(m) { const t = missionTarget(m); return `${MISSIONS[m.id].text(t)} <b>${Math.min(m.prog, t)}/${t}</b>${m.done ? ' &check;' : ''}`; }
 function clampLvl(v, t) { return Math.max(0, Math.min(t.length - 1, v | 0)); }
-function persist() { try { localStorage.setItem('cm-save', JSON.stringify(SAVE)); } catch (e) { } cloudTouch(); }
+function persist() { if (CLOUD_RELOADING) return; try { localStorage.setItem('cm-save', JSON.stringify(SAVE)); } catch (e) { } cloudTouch(); }
 
 const ri = (a, b) => a + Math.floor(Math.random() * (b - a + 1));   // random.randint
 const uni = (a, b) => a + Math.random() * (b - a);                  // random.uniform
@@ -2215,7 +2217,7 @@ async function saveNameSheet() {
   closeNameSheet();
 }
 // ---- v34: cloud save (Supabase). The whole save is mirrored as one document under the player's name + PIN. ----
-var CLOUD_T = 0, CLOUD_BUSY = false, CLOUD_READY = false;   // nothing is stamped or pushed until the start-up check has run
+var CLOUD_T = 0, CLOUD_BUSY = false, CLOUD_READY = false, CLOUD_RELOADING = false;   // nothing is stamped or pushed until the start-up check has run
 function cloudCred() { try { const c = JSON.parse(localStorage.getItem('cm-cloud') || 'null'); return c && c.name && /^\d{4}$/.test(c.pin) ? c : null; } catch (e) { return null; } }
 function localT() { try { return +localStorage.getItem('cm-savet') || 0; } catch (e) { return 0; } }
 function cloudStamp() { try { localStorage.setItem('cm-savet', String(Date.now())); } catch (e) { } }
@@ -2241,7 +2243,7 @@ function cloudApply(d, t) {                       // write a cloud save into thi
     if (d.pid && d.psec) { localStorage.setItem('cm-pid', d.pid); localStorage.setItem('cm-psec', d.psec); }
     localStorage.setItem('cm-savet', String(+t || Date.now()));
   } catch (e) { return; }
-  location.reload();
+  CLOUD_RELOADING = true; location.reload();
 }
 async function cloudPush() {
   const c = cloudCred(); if (!c || !cloudOn() || CLOUD_BUSY) return; CLOUD_BUSY = true;
@@ -2259,6 +2261,19 @@ async function gatedStart() {
   try { await Promise.race([LB.ready, new Promise(r => setTimeout(r, 2500))]); } catch (e) { }
   if (!playerName() || (cloudOn() && !cloudCred())) { openNameSheet(gatedStart, playerName() ? 'Set a PIN to save your game in the cloud' : null); return; }
   startGame();
+}
+function grantComp() {                          // v35: one-off compensation for saves made before this version
+  if (CLOUD_RELOADING || SAVE.comp1) return;
+  SAVE.comp1 = 1;
+  if (HAD_SAVE) {
+    SAVE.bank += 18888;
+    if (state === 'title') updateBest(); if (state === 'shop') $('bank').textContent = SAVE.bank.toLocaleString();
+    $('giftTitle').textContent = '+18,888 coins';
+    $('giftMsg').textContent = 'A thank-you gift for every saved game \u00b7 Added to your bank: ' + SAVE.bank.toLocaleString() + ' coins';
+    if ($('nameSheet').hidden) { $('giftSheet').hidden = false; synth('chest'); }
+    else { const t = setInterval(() => { if ($('nameSheet').hidden) { clearInterval(t); $('giftSheet').hidden = false; synth('chest'); } }, 500); }
+  }
+  persist();
 }
 async function cloudBoot() {                      // on start / return: pick up a newer save from another device
   try { await Promise.race([LB.ready, new Promise(r => setTimeout(r, 4000))]); } catch (e) { }
@@ -5247,7 +5262,7 @@ function frame(nowMs) {
   requestAnimationFrame(frame);
   await Promise.all([loadChild(false), loadSounds()]);
   const b = $('btnStart'); b.disabled = false; b.textContent = 'Start';
-  setTimeout(cloudBoot, 800);
+  setTimeout(() => cloudBoot().finally(grantComp), 800);
 })();
 </script>
 
