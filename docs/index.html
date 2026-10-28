@@ -159,7 +159,10 @@ h2{font-size:clamp(32px,9vh,54px);line-height:1}
 .lb-empty{grid-column:1/-1;text-align:center;padding:18px 0;color:var(--cream-dim);font-weight:600}
 .lb-note{margin:8px 0 0;font-size:11px;font-weight:600;color:var(--cream-dim)}
 #nameIn{width:min(280px,80vw);margin:6px 0 12px;padding:10px 14px;border-radius:12px;border:1.5px solid rgba(255,245,223,.35);background:rgba(255,255,255,.08);color:var(--cream);font:700 17px var(--font-ui);text-align:center;outline:none}
-#nameIn:focus{border-color:var(--gold)}
+#nameIn:focus,#pinIn:focus{border-color:var(--gold)}
+#pinIn{width:min(180px,60vw);margin:0 0 6px;padding:10px 14px;border-radius:12px;border:1.5px solid rgba(255,245,223,.35);background:rgba(255,255,255,.08);color:var(--cream);font:700 20px var(--font-ui);text-align:center;letter-spacing:.4em;outline:none}
+.pin-msg{margin:0 auto 12px;max-width:300px;font:600 12px/1.4 var(--font-ui);color:rgba(255,245,223,.72)}
+.pin-msg.err{color:#ff9a8a}
 .namechip{margin-right:8px;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,245,223,.35);background:rgba(255,245,223,.08);color:var(--cream);font:700 12px var(--font-ui);cursor:pointer}
 /* v21: pet details sheet */
 .card[data-key="pet"] canvas{cursor:pointer}
@@ -252,8 +255,10 @@ h2{font-size:clamp(32px,9vh,54px);line-height:1}
   </div></div>
   <div class="sheet" id="nameSheet" hidden><div class="sh-box" style="width:min(420px,100%)">
     <button class="sh-x" id="nameClose" type="button" aria-label="Close">&times;</button>
-    <h3>Your Name</h3><p class="sh-sub">Shown on the leaderboard</p>
-    <input id="nameIn" type="text" maxlength="14" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="Enter a name" enterkeyhint="done">
+    <h3>Your Name</h3><p class="sh-sub" id="nameSub">Shown on the leaderboard</p>
+    <input id="nameIn" type="text" maxlength="14" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="Enter a name" enterkeyhint="next">
+    <div id="pinWrap" hidden><input id="pinIn" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="4-digit PIN" enterkeyhint="done">
+    <p class="pin-msg" id="pinMsg">Name + PIN = your cloud save. Use them on any device to get your coins back.</p></div>
     <div class="row"><button class="btn primary" id="nameSave" type="button">Save</button></div>
   </div></div>
 
@@ -423,11 +428,11 @@ try { const m = JSON.parse(localStorage.getItem('cm-missions') || 'null'); if (A
 if (!SAVE.missions) { SAVE.missions = []; refillMissions(); }
 function newMission(tier = 0) { const used = SAVE.missions.map(m => m.id), ids = Object.keys(MISSIONS).filter(k => !used.includes(k)); return { id: ids[Math.floor(Math.random() * ids.length)], tier: Math.min(2, tier), prog: 0, done: false }; }
 function refillMissions() { SAVE.missions = SAVE.missions.filter(m => !m.done); while (SAVE.missions.length < 3) SAVE.missions.push(newMission(Math.floor(Math.random() * 2))); saveMissions(); }
-function saveMissions() { try { localStorage.setItem('cm-missions', JSON.stringify(SAVE.missions)); } catch (e) { } }
+function saveMissions() { try { localStorage.setItem('cm-missions', JSON.stringify(SAVE.missions)); } catch (e) { } cloudTouch(); }
 function missionTarget(m) { return MISSIONS[m.id].n[m.tier]; }
 function missionLabel(m) { const t = missionTarget(m); return `${MISSIONS[m.id].text(t)} <b>${Math.min(m.prog, t)}/${t}</b>${m.done ? ' &check;' : ''}`; }
 function clampLvl(v, t) { return Math.max(0, Math.min(t.length - 1, v | 0)); }
-function persist() { try { localStorage.setItem('cm-save', JSON.stringify(SAVE)); } catch (e) { } }
+function persist() { try { localStorage.setItem('cm-save', JSON.stringify(SAVE)); } catch (e) { } cloudTouch(); }
 
 const ri = (a, b) => a + Math.floor(Math.random() * (b - a + 1));   // random.randint
 const uni = (a, b) => a + Math.random() * (b - a);                  // random.uniform
@@ -2180,15 +2185,84 @@ const LB = { db: null, uid: null, rows: [], mine: null, online: false, ro: false
 function playerName() { try { return localStorage.getItem('cm-name') || ''; } catch (e) { return ''; } }
 function cleanName(v) { return String(v || '').replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 14); }
 let nameAfter = null;
-function openNameSheet(after) { nameAfter = after || null; $('nameIn').value = playerName(); $('nameSheet').hidden = false; setTimeout(() => { try { $('nameIn').focus(); } catch (e) { } }, 50); }
+function openNameSheet(after, sub) { nameAfter = after || null; $('nameIn').value = playerName(); pinPrep(sub); $('nameSheet').hidden = false; setTimeout(() => { try { $('nameIn').focus(); } catch (e) { } }, 50); }
 function closeNameSheet() { $('nameSheet').hidden = true; try { $('nameIn').blur(); } catch (e) { } const f = nameAfter; nameAfter = null; if (f && playerName()) f(); }
-function saveNameSheet() {
+async function saveNameSheet() {
   const n = cleanName($('nameIn').value); if (!n) { $('nameIn').focus(); return; }
-  try { localStorage.setItem('cm-name', n); } catch (e) { }
+  if (cloudOn()) {                                // v34: name + PIN is the cloud-save account
+    const pin = $('pinIn').value.trim();
+    if (!/^\d{4}$/.test(pin)) { pinMsg('Enter a 4-digit PIN (numbers only).', true); $('pinIn').focus(); return; }
+    const btn = $('nameSave'); if (btn.disabled) return; btn.disabled = true; btn.textContent = 'Checking\u2026';
+    try {
+      const old = cloudCred(), r = await sbFetch('rpc/cloud_load', { p_name: n, p_pin: pin });
+      const nm = r && r.ok && r.name ? cleanName(r.name) || n : n;   // keep the account's own spelling
+      if (r && r.err === 'wrong_pin') { pinMsg('This name is taken, or the PIN is wrong.', true); return; }
+      if (r && r.err === 'locked') { pinMsg('Too many wrong PINs. Try again in 15 minutes.', true); return; }
+      if (r && r.err === 'bad_pin') { pinMsg('Enter a 4-digit PIN (numbers only).', true); return; }
+      try { localStorage.setItem('cm-name', nm); localStorage.setItem('cm-cloud', JSON.stringify({ name: nm, pin })); } catch (e) { }
+      CLOUD_READY = true;
+      if (r && r.ok) {
+        const switching = !old || old.name.toLowerCase() !== nm.toLowerCase();
+        if ((switching || (+r.t || 0) > localT()) && state !== 'play' && r.data && r.data.save) { btn.textContent = 'Loading\u2026'; cloudApply(r.data, r.t); return; }
+        cloudPush();
+      } else { cloudStamp(); await cloudPush(); }   // a new account starts from this device's progress
+    } catch (e) { try { localStorage.setItem('cm-name', n); } catch (e2) { } }   // cloud offline: keep the name, sync later
+    finally { btn.disabled = false; btn.textContent = 'Save'; }
+  } else { try { localStorage.setItem('cm-name', n); } catch (e) { } }
   updateBest(); checkGifts();
   if (LB.online && LB.mine && LB.mine.name !== n && !LB.ro) lbWrite(Object.assign({}, LB.mine, { name: n }));   // rename on the board too
   else lbSyncBest();
   closeNameSheet();
+}
+// ---- v34: cloud save (Supabase). The whole save is mirrored as one document under the player's name + PIN. ----
+var CLOUD_T = 0, CLOUD_BUSY = false, CLOUD_READY = false;   // nothing is stamped or pushed until the start-up check has run
+function cloudCred() { try { const c = JSON.parse(localStorage.getItem('cm-cloud') || 'null'); return c && c.name && /^\d{4}$/.test(c.pin) ? c : null; } catch (e) { return null; } }
+function localT() { try { return +localStorage.getItem('cm-savet') || 0; } catch (e) { return 0; } }
+function cloudStamp() { try { localStorage.setItem('cm-savet', String(Date.now())); } catch (e) { } }
+function cloudTouch() { if (!CLOUD_READY) return; cloudStamp(); clearTimeout(CLOUD_T); CLOUD_T = setTimeout(() => cloudPush(), 2500); }
+function pinMsg(t, err) { const m = $('pinMsg'); m.textContent = t; m.classList.toggle('err', !!err); }
+function pinPrep(sub) {
+  const on = cloudOn(), c = cloudCred();
+  $('pinWrap').hidden = !on; $('pinIn').value = c && playerName() && c.name.toLowerCase() === playerName().toLowerCase() ? c.pin : '';
+  $('nameSub').textContent = sub || (on ? 'Shown on the leaderboard \u00b7 saved to the cloud' : 'Shown on the leaderboard');
+  pinMsg(c ? 'Your save is backed up to the cloud. Same name + PIN on another device loads it.' : 'Name + PIN = your cloud save. Use them on any device to get your coins back.');
+}
+function cloudPack() {
+  const g = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  let gifts = []; try { gifts = JSON.parse(g('cm-gifts') || '[]'); } catch (e) { }
+  return { v: 1, save: SAVE, best: best || 0, bestDist: (typeof bestDist === 'number' ? bestDist : 0), gifts, pid: g('cm-pid'), psec: g('cm-psec') };
+}
+function cloudApply(d, t) {                       // write a cloud save into this browser, then restart with it
+  try {
+    localStorage.setItem('cm-save', JSON.stringify(d.save || {}));
+    if (d.save && Array.isArray(d.save.missions)) localStorage.setItem('cm-missions', JSON.stringify(d.save.missions));
+    localStorage.setItem('cm-best', String(+d.best || 0)); localStorage.setItem('cm-bestdist', String(+d.bestDist || 0));
+    localStorage.setItem('cm-gifts', JSON.stringify(Array.isArray(d.gifts) ? d.gifts : []));
+    if (d.pid && d.psec) { localStorage.setItem('cm-pid', d.pid); localStorage.setItem('cm-psec', d.psec); }
+    localStorage.setItem('cm-savet', String(+t || Date.now()));
+  } catch (e) { return; }
+  location.reload();
+}
+async function cloudPush() {
+  const c = cloudCred(); if (!c || !cloudOn() || CLOUD_BUSY) return; CLOUD_BUSY = true;
+  try {
+    const r = await sbFetch('rpc/cloud_save', { p_name: c.name, p_pin: c.pin, p_data: cloudPack(), p_t: localT() });
+    if (r && r.err === 'newer' && r.data && r.data.save && (state === 'title' || state === 'shop')) cloudApply(r.data, r.t);   // another device saved later
+    else if (r && r.err === 'wrong_pin') { try { localStorage.removeItem('cm-cloud'); } catch (e) { } }   // PIN changed elsewhere
+  } catch (e) { } finally { CLOUD_BUSY = false; }
+}
+function cloudOn() { return typeof sbOn === 'function' && sbOn() && !!LB.sb; }   // only when Supabase answered
+async function cloudBoot() {                      // on start / return: pick up a newer save from another device
+  try { await Promise.race([LB.ready, new Promise(r => setTimeout(r, 4000))]); } catch (e) { }
+  const c = cloudCred(); if (!cloudOn()) { CLOUD_READY = true; return; }
+  if (!c) { CLOUD_READY = true; if (playerName() && !cloudBoot.asked && state === 'title') { cloudBoot.asked = true; openNameSheet(null, 'Add a PIN to back up your save in the cloud'); } return; }
+  try {
+    const r = await sbFetch('rpc/cloud_load', { p_name: c.name, p_pin: c.pin });
+    if (r && r.ok) { if ((+r.t || 0) > localT() && state === 'title' && r.data && r.data.save) return cloudApply(r.data, r.t); CLOUD_READY = true; if ((+r.t || 0) < localT()) cloudPush(); }
+    else if (r && r.err === 'none') { CLOUD_READY = true; cloudPush(); }
+    else if (r && r.err === 'wrong_pin') { try { localStorage.removeItem('cm-cloud'); } catch (e) { } }
+  } catch (e) { }
+  CLOUD_READY = true;
 }
 function lbLocal() { try { const a = JSON.parse(localStorage.getItem('cm-board') || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
 function lbWrite(doc) {
@@ -2245,7 +2319,7 @@ LB.ready = (async () => {
     if (sbOn()) {
       try {
         const me = sbIds(); const db = sbDb(me); await sbFetch('board?select=id&limit=1');   // reachable?
-        LB.db = db; LB.uid = me.id; LB.online = true;
+        LB.db = db; LB.uid = me.id; LB.online = true; LB.sb = true;
         try { const m = await db.doc('board/' + me.id).get(); if (m.exists) LB.mine = m.data(); } catch (e) { }
         lbSyncBest();
         db.collection('board').orderBy('best', 'desc').limit(20).onSnapshot(snap => {
@@ -2566,7 +2640,9 @@ $('lbSheet').addEventListener('click', e => { if (e.target.id === 'lbSheet') clo
 $('btnName').addEventListener('click', () => openNameSheet());
 $('nameClose').addEventListener('click', closeNameSheet);
 $('nameSave').addEventListener('click', saveNameSheet);
-$('nameIn').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); saveNameSheet(); } });
+$('nameIn').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); if (!$('pinWrap').hidden && !/^\d{4}$/.test($('pinIn').value)) $('pinIn').focus(); else saveNameSheet(); } });
+$('pinIn').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); saveNameSheet(); } });
+$('pinIn').addEventListener('input', () => { $('pinIn').value = $('pinIn').value.replace(/\D/g, '').slice(0, 4); });
 $('btnShopT').addEventListener('click', () => openShop('title'));
 $('btnShopO').addEventListener('click', () => openShop('over'));
 $('btnShopPlay').addEventListener('click', startGame);
@@ -2578,7 +2654,7 @@ $('piNext').addEventListener('click', () => { if (piLvl < PETS.length - 1) { piL
 $('btnSpin').addEventListener('click', spinWheel);
 $('btnRevive').addEventListener('click', doRevive);
 $('btnGiveUp').addEventListener('click', giveUp);
-document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); else if (state === 'play' || state === 'pause') lockWake(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state === 'title') cloudBoot(); if (document.hidden) { pauseGame(); clearTimeout(CLOUD_T); cloudPush(); } else if (state === 'play' || state === 'pause') lockWake(); });
 
 // ============================================================
 // FX (purely visual)
@@ -5163,6 +5239,7 @@ function frame(nowMs) {
   requestAnimationFrame(frame);
   await Promise.all([loadChild(false), loadSounds()]);
   const b = $('btnStart'); b.disabled = false; b.textContent = 'Start';
+  setTimeout(cloudBoot, 800);
 })();
 </script>
 
