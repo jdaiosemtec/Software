@@ -2105,9 +2105,9 @@ addEventListener('keydown', e => {
   if (e.repeat) { if (e.code === 'Space') e.preventDefault(); return; }
   if (state === 'wheel' && (e.code === 'Space' || e.code === 'Enter')) { e.preventDefault(); spinWheel(); return; }
   if (state === 'revive') { if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); doRevive(); } else if (e.code === 'Escape') giveUp(); return; }
-  if (e.code === 'Space') { e.preventDefault(); if (state === 'title') startGame(); else { setPad('jump', true); jumpPress(); } }
+  if (e.code === 'Space') { e.preventDefault(); if (state === 'title') gatedStart(); else { setPad('jump', true); jumpPress(); } }
   else if (e.code === 'ArrowDown') { e.preventDefault(); setPad('crouch', true); crouchPress(); }
-  else if (e.code === 'Enter' || e.code === 'NumpadEnter') { e.preventDefault(); if (state === 'play') pauseGame(); else if (state === 'pause') resumeGame(); else if (state === 'over') startGame(); else if (state !== 'cut') startGame(); }
+  else if (e.code === 'Enter' || e.code === 'NumpadEnter') { e.preventDefault(); if (state === 'play') pauseGame(); else if (state === 'pause') resumeGame(); else if (state === 'over') gatedStart(); else if (state !== 'cut') gatedStart(); }
   else if (e.code === 'Escape') { if (state !== 'title') quitGame(); }
   else if (e.code === 'KeyI') reloadPhoto();
 });
@@ -2186,7 +2186,7 @@ function playerName() { try { return localStorage.getItem('cm-name') || ''; } ca
 function cleanName(v) { return String(v || '').replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 14); }
 let nameAfter = null;
 function openNameSheet(after, sub) { nameAfter = after || null; $('nameIn').value = playerName(); pinPrep(sub); $('nameSheet').hidden = false; setTimeout(() => { try { $('nameIn').focus(); } catch (e) { } }, 50); }
-function closeNameSheet() { $('nameSheet').hidden = true; try { $('nameIn').blur(); } catch (e) { } const f = nameAfter; nameAfter = null; if (f && playerName()) f(); }
+function closeNameSheet() { $('nameSheet').hidden = true; try { $('nameIn').blur(); } catch (e) { } const f = nameAfter; nameAfter = null; if (f && playerName() && (!cloudOn() || cloudCred())) f(); }
 async function saveNameSheet() {
   const n = cleanName($('nameIn').value); if (!n) { $('nameIn').focus(); return; }
   if (cloudOn()) {                                // v34: name + PIN is the cloud-save account
@@ -2206,7 +2206,7 @@ async function saveNameSheet() {
         if ((switching || (+r.t || 0) > localT()) && state !== 'play' && r.data && r.data.save) { btn.textContent = 'Loading\u2026'; cloudApply(r.data, r.t); return; }
         cloudPush();
       } else { cloudStamp(); await cloudPush(); }   // a new account starts from this device's progress
-    } catch (e) { try { localStorage.setItem('cm-name', n); } catch (e2) { } }   // cloud offline: keep the name, sync later
+    } catch (e) { try { localStorage.setItem('cm-name', n); } catch (e2) { } CLOUD_SKIP = true; }   // cloud offline: keep the name, play on, sync next time
     finally { btn.disabled = false; btn.textContent = 'Save'; }
   } else { try { localStorage.setItem('cm-name', n); } catch (e) { } }
   updateBest(); checkGifts();
@@ -2251,7 +2251,15 @@ async function cloudPush() {
     else if (r && r.err === 'wrong_pin') { try { localStorage.removeItem('cm-cloud'); } catch (e) { } }   // PIN changed elsewhere
   } catch (e) { } finally { CLOUD_BUSY = false; }
 }
-function cloudOn() { return typeof sbOn === 'function' && sbOn() && !!LB.sb; }   // only when Supabase answered
+function cloudOn() { return typeof sbOn === 'function' && sbOn() && !!LB.sb && !CLOUD_SKIP; }   // only when Supabase answered
+var CLOUD_SKIP = false;                           // the cloud stopped answering this session: don't lock anyone out
+// v35: every player needs a name and (when the cloud save is reachable) a 4-digit PIN before a run starts
+async function gatedStart() {
+  if (!$('nameSheet').hidden || state === 'play' || state === 'cut') return;
+  try { await Promise.race([LB.ready, new Promise(r => setTimeout(r, 2500))]); } catch (e) { }
+  if (!playerName() || (cloudOn() && !cloudCred())) { openNameSheet(gatedStart, playerName() ? 'Set a PIN to save your game in the cloud' : null); return; }
+  startGame();
+}
 async function cloudBoot() {                      // on start / return: pick up a newer save from another device
   try { await Promise.race([LB.ready, new Promise(r => setTimeout(r, 4000))]); } catch (e) { }
   const c = cloudCred(); if (!cloudOn()) { CLOUD_READY = true; return; }
@@ -2605,7 +2613,7 @@ let toastT = 0;
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 1600); }
 async function reloadPhoto() { const ok = await loadChild(true); toast(ok ? 'Photo reloaded' : 'Could not load the photo'); }
 
-$('btnStart').addEventListener('click', () => { if (!playerName()) openNameSheet(startGame); else startGame(); });
+$('btnStart').addEventListener('click', () => gatedStart());
 // v12: iOS drops the synthesized "click" when another finger is on a pad or the finger slides a little,
 // so the pause button reacts on touch-down directly (click stays as the mouse fallback)
 $('btnPause').addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); pauseGame(); });
@@ -2630,7 +2638,7 @@ $('btnMusic').addEventListener('click', () => { MUSIC.on = !MUSIC.on; try { loca
 musicLabel();
 $('btnQuitP').addEventListener('click', quitGame);
 $('btnQuitO').addEventListener('click', quitGame);
-$('btnRestart').addEventListener('click', () => { closeLb(); startGame(); });
+$('btnRestart').addEventListener('click', () => { closeLb(); gatedStart(); });
 $('btnLbT').addEventListener('click', () => openLb(false));
 $('giftOk').addEventListener('click', () => { $('giftSheet').hidden = true; });
 checkGifts();
@@ -2645,7 +2653,7 @@ $('pinIn').addEventListener('keydown', e => { e.stopPropagation(); if (e.key ===
 $('pinIn').addEventListener('input', () => { $('pinIn').value = $('pinIn').value.replace(/\D/g, '').slice(0, 4); });
 $('btnShopT').addEventListener('click', () => openShop('title'));
 $('btnShopO').addEventListener('click', () => openShop('over'));
-$('btnShopPlay').addEventListener('click', startGame);
+$('btnShopPlay').addEventListener('click', () => gatedStart());
 $('btnShopBack').addEventListener('click', closeShop);
 $('piClose').addEventListener('click', closePetInfo);
 $('petInfo').addEventListener('click', e => { if (e.target.id === 'petInfo') closePetInfo(); });
