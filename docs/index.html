@@ -726,7 +726,7 @@ function mDrum(kind, t, out, v = 1) {
 }
 function musicTick() {
   if (!audioCtx || audioCtx.state !== 'running') return;
-  const want = MUSIC.on && state === 'play' ? (S.bonusT > 0 ? 'bonus' : S.boss ? 'boss' : STAGE_THEME[(S.biome || 0) % STAGE_THEME.length]) : null;
+  const want = MUSIC.on && (state === 'play' || state === 'cut') ? (S.bonusT > 0 ? 'bonus' : S.boss ? 'boss' : STAGE_THEME[(S.biome || 0) % STAGE_THEME.length]) : null;
   const bus = musicBus(), now = audioCtx.currentTime;
   const vol = want ? (S.pu && S.pu.rocket > 0 ? .55 : 1) * .5 : 0;          // duck under the rocket roar; silent when paused / in menus
   bus.gain.setTargetAtTime(vol, now, want ? .25 : .12);
@@ -2714,159 +2714,138 @@ loadImage(SWIM_UPPER_URL).then(img => {
   PLAYER.swimUpper = c; PLAYER.masks = {};
 });
 
-// ---- v31: cutscenes into and out of the sea ----
-// dive: Mason scoots along the beach, hits a trampoline, flips through the air and nose-dives into the sea.
-// rise: after the sea boss, a big bubble carries the swimming Mason up through the surface and back over to land.
+// ---- v32: cutscenes into and out of the sea, played inside the real game world ----
+// dive: the current stage keeps scrolling; a sandy beach and the sea roll in, Mason on his current ride hits a trampoline,
+//       flips through the air and nose-dives into the sea. rise: a big bubble carries the swimming Mason up through the
+//       ocean surface; the land stage fades in and the bubble floats down onto the ground, pops, and Mason rides on.
 let CUT = null;
 const cutEase = x => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
-const cutOut = x => { x = clamp(x, 0, 1); return 1 - (1 - x) * (1 - x); };
+const CUT_SURF = GROUND_Y + 8;
 function startCut(kind) {
-  CUT = { kind, t: 0, dur: kind === 'dive' ? 4.7 : 4.6, p: [], fired: {} };
-  state = 'cut'; P.holding = false; S.chargeStart = null; P.upHeld = false; P.downHeld = false;
+  const C = CUT = { kind, t: 0, ph: kind === 'dive' ? 'ride' : 'up', pt: 0, px0: P.x, rot: 0, v: kind === 'dive' ? 400 : 260, cover: 0, bubble: kind === 'rise', swim: kind === 'rise', title: kind === 'dive' ? 'Dive into the Sea!' : 'Back to Land!' };
+  state = 'cut'; P.holding = false; S.chargeStart = null; P.upHeld = false; P.downHeld = false; P.crouching = false; P.cAnim = 0; P.flip = 9; P.dbl = false; P.tri = false; S.triT = 0; S.cloudT = 0;
   touchRole.clear(); setPad('jump', false); setPad('crouch', false); show('controls', false);
+  C.collects = S.collects; S.collects = []; S.obstacles = []; S.meteors = []; S.mobShots = []; S.eproj = []; S.bullets = []; S.plats = []; S.pits = []; S.chests = []; S.orbs = []; S.letterItems = [];
+  if (S.seaFish) S.seaFish = [];
+  if (kind === 'dive') { C.shoreX = LW + 230; C.tramp = { x: C.shoreX - 250, w: 66, h: 22, sq: 0 }; S.tramps = [C.tramp]; P.y = GROUND_Y - PH; P.onGround = true; }
+  else { C.y0 = P.y; C.x0 = P.x; }
 }
-function cutOnce(k, f) { if (!CUT.fired[k]) { CUT.fired[k] = true; f(); } }
-function cutPart(o) { CUT.p.push(Object.assign({ vx: 0, vy: 0, ay: 0, drag: 0, r: 3, max: 1, col: '255,255,255', kind: 'dot' }, o, { life: o.max || 1 })); }
-function cutSplash(x, y, n, up) {
-  for (let i = 0; i < n; i++) { const a = -Math.PI / 2 + uni(-.9, .9); const sp = uni(180, 520) * (up || 1); cutPart({ x: x + uni(-30, 30), y, vx: Math.cos(a) * sp * .6, vy: Math.sin(a) * sp, ay: 900, r: uni(2.5, 6), max: uni(.7, 1.3), col: '235,250,255' }); }
-  for (let i = 0; i < 14; i++) cutPart({ x: x + uni(-50, 50), y: y + uni(-4, 4), vx: uni(-60, 60), vy: uni(-20, 0), drag: 2, r: uni(10, 20), max: uni(.6, 1), col: '255,255,255', kind: 'foam' });
+function cutSplash(x, y, n) {
+  for (let i = 0; i < n; i++) { const a = -Math.PI / 2 + uni(-.8, .8), sp = uni(200, 560); part({ x: x + uni(-26, 26), y, vx: Math.cos(a) * sp * .55, vy: Math.sin(a) * sp, ay: 950, life: uni(.7, 1.2), max: 1.2, size: uni(2.5, 5.5), col: [235, 250, 255], add: false, shape: 'dot', scroll: false }); }
+  for (let i = 0; i < 16; i++) part({ x: x + uni(-46, 46), y: y + uni(-6, 4), vx: uni(-70, 70), vy: uni(-30, 0), drag: 2, life: uni(.6, 1), max: 1, size: uni(8, 14), grow: 26, col: [255, 255, 255], add: false, shape: 'puff', scroll: false });
 }
+function cutBubbles(x, y, n) { for (let i = 0; i < n; i++) part({ x: x + uni(-30, 30), y: y + uni(-20, 30), vx: uni(-20, 20), vy: -uni(60, 160), drag: .6, life: uni(.8, 1.5), max: 1.5, size: uni(2, 5), col: [230, 250, 255], shape: 'bubble', scroll: false }); }
 function cutStep(el) {
-  const C = CUT; C.t += el;
-  for (const q of C.p) { q.vy += q.ay * el; if (q.drag) { const d = Math.exp(-q.drag * el); q.vx *= d; q.vy *= d; } q.x += q.vx * el; q.y += q.vy * el; q.life -= el; }
-  C.p = C.p.filter(q => q.life > 0);
+  const C = CUT; C.t += el; C.pt += el;
+  const scroll = d => { S.worldX = (S.worldX || 0) + d; if (C.shoreX != null) C.shoreX -= d; if (C.tramp) C.tramp.x -= d; };
+  if (C.tramp && C.tramp.sq > 0) C.tramp.sq = Math.max(0, C.tramp.sq - el * 1.6);
   if (C.kind === 'dive') {
-    if (C.t > 1.5) cutOnce('boing', () => synth('boing'));
-    if (C.t > 3.22) cutOnce('splash', () => { synth('bubble'); cutSplash(LW * .8 + PW / 2, GROUND_Y + 14, 60); FX.shake = Math.max(FX.shake || 0, 6); });
-    if (C.t > 3.3 && Math.random() < el * 40) cutPart({ x: LW * .8 + uni(0, PW), y: GROUND_Y + uni(20, 80), vy: -uni(40, 90), r: uni(2, 5), max: 1.4, col: '230,250,255', kind: 'bubble' });
-  } else {
-    const b = cutBubble(C.t);
-    if (C.t < 1.4 && Math.random() < el * 25) cutPart({ x: b.x + uni(-70, 70), y: b.y + uni(40, 90), vy: -uni(60, 140), r: uni(2, 5), max: 1.2, col: '230,250,255', kind: 'bubble' });
-    if (C.t > 1.32) cutOnce('surface', () => { synth('bubble'); cutSplash(b.x, CUT_SY, 50, 1.1); });
-    if (C.t > 3.15) cutOnce('pop', () => { synth('boing'); for (let i = 0; i < 26; i++) { const a = i / 26 * Math.PI * 2; cutPart({ x: b.x + Math.cos(a) * 80, y: b.y + Math.sin(a) * 80, vx: Math.cos(a) * uni(120, 260), vy: Math.sin(a) * uni(120, 260) - 60, ay: 600, r: uni(2, 4.5), max: uni(.5, .9), col: '225,248,255' }); } });
-  }
-  if (C.t >= C.dur) { CUT = null; state = 'play'; accum = 0; last = performance.now(); show('controls', true); nextStage(true); }
-}
-const CUT_SY = 318, CUT_LY = 262;
-function cutBubble(t) {           // where the rise bubble is (centre)
-  const sx = LW * .26, landX = LW * .64;
-  if (t < 1.4) { const u = cutOut(t / 1.4); return { x: sx + Math.sin(t * 3) * 10, y: LH + 110 - (LH + 110 - CUT_SY - 5) * u }; }
-  const u = clamp((t - 1.4) / 1.75, 0, 1), e = cutEase(u), end = CUT_LY - 12 - PH / 2 - 14;
-  return { x: sx + (landX + 150 - sx) * e, y: CUT_SY - 5 + (end - CUT_SY + 5) * u - 210 * 4 * u * (1 - u) };
-}
-function cutSky(g, top, bot, hz) { const gr = g.createLinearGradient(0, 0, 0, hz); gr.addColorStop(0, top); gr.addColorStop(1, bot); g.fillStyle = gr; g.fillRect(0, 0, LW, hz + 1); }
-function cutSun(g, x, y) {
-  const gr = g.createRadialGradient(x, y, 10, x, y, 120); gr.addColorStop(0, 'rgba(255,250,210,.95)'); gr.addColorStop(.25, 'rgba(255,236,160,.55)'); gr.addColorStop(1, 'rgba(255,220,140,0)');
-  g.fillStyle = gr; g.beginPath(); g.arc(x, y, 120, 0, 7); g.fill(); g.fillStyle = '#fff6cf'; g.beginPath(); g.arc(x, y, 30, 0, 7); g.fill();
-}
-function cutCloud(g, x, y, s) { g.fillStyle = 'rgba(255,255,255,.92)'; for (const [dx, dy, r] of [[0, 0, 26], [28, -10, 30], [58, 0, 24], [30, 8, 26]]) { g.beginPath(); g.arc(x + dx * s, y + dy * s, r * s, 0, 7); g.fill(); } }
-function cutPalm(g, x, y, s) {
-  g.save(); g.translate(x, y); g.scale(s, s);
-  g.strokeStyle = '#8a5a2e'; g.lineWidth = 14; g.lineCap = 'round'; g.beginPath(); g.moveTo(0, 0); g.quadraticCurveTo(18, -80, 6, -170); g.stroke();
-  g.strokeStyle = '#6e4522'; g.lineWidth = 2; for (let i = 1; i < 9; i++) { const yy = -i * 19; g.beginPath(); g.moveTo(-6 + i * .9, yy); g.lineTo(8 + i * .9, yy + 4); g.stroke(); }
-  const sw = Math.sin(vt * 1.6) * .06;
-  for (let i = 0; i < 7; i++) { const a = -Math.PI / 2 + (i - 3) * .55 + sw; g.save(); g.translate(6, -170); g.rotate(a); g.fillStyle = i % 2 ? '#2f9a4a' : '#3cb85a'; g.beginPath(); g.moveTo(0, 0); g.quadraticCurveTo(50, -26, 104, 10); g.quadraticCurveTo(50, -6, 0, 6); g.fill(); g.restore(); }
-  g.fillStyle = '#6b3f1d'; for (const [dx, dy] of [[-4, -162], [12, -160], [4, -154]]) { g.beginPath(); g.arc(dx, dy, 7, 0, 7); g.fill(); }
-  g.restore();
-}
-function cutWaves(g, y0, y1, col) {
-  g.strokeStyle = col; g.lineWidth = 2;
-  for (let yy = y0; yy < y1; yy += 22) { const off = (vt * 40 + yy * 7) % 80; g.beginPath(); for (let x = -80 + off; x < LW; x += 80) { g.moveTo(x, yy); g.quadraticCurveTo(x + 15, yy - 4, x + 30, yy); } g.stroke(); }
-}
-function cutParts(g) {
-  for (const q of CUT.p) {
-    const a = clamp(q.life / q.max, 0, 1);
-    if (q.kind === 'bubble') { g.strokeStyle = `rgba(${q.col},${(a * .9).toFixed(3)})`; g.lineWidth = 1.5; g.beginPath(); g.arc(q.x, q.y, q.r, 0, 7); g.stroke(); }
-    else { g.fillStyle = `rgba(${q.col},${(q.kind === 'foam' ? a * .7 : a).toFixed(3)})`; g.beginPath(); g.arc(q.x, q.y, q.r * (q.kind === 'foam' ? 1 + (1 - a) : 1), 0, 7); g.fill(); }
-  }
-}
-function cutTitle(g, txt, t, t0, t1) {
-  const a = Math.min(cutEase((t - t0) / .3), cutEase((t1 - t) / .3)); if (a <= 0) return;
-  g.save(); g.globalAlpha = a; g.font = '400 42px ' + (getComputedStyle(document.documentElement).getPropertyValue('--font-display') || 'sans-serif'); g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.lineWidth = 8; g.strokeStyle = 'rgba(10,40,80,.75)'; g.strokeText(txt, LW / 2, 64 - (1 - a) * 12); g.fillStyle = '#fff'; g.fillText(txt, LW / 2, 64 - (1 - a) * 12); g.restore();
-}
-function cutMason(g, x, y, rot, ride) {          // scooter Mason at hitbox position x,y, rotated about his middle
-  g.save(); g.translate(x + PW / 2, y + PH / 2); g.rotate(rot); g.translate(-PW / 2, -PH / 2);
-  drawPose(g, 0, 0, vt, ride); g.restore();
-}
-function drawCut(g) {
-  const C = CUT, t = C.t;
-  if (C.kind === 'dive') {
-    const hz = 214, seaX = LW * .6, Y0 = GROUND_Y, W0 = GROUND_Y + 14, tx = seaX - 170;
-    cutSky(g, '#5fc2f5', '#d7f2ff', hz); cutSun(g, LW * .82, 92);
-    cutCloud(g, (LW * .18 - vt * 12) % (LW + 200), 84, 1); cutCloud(g, (LW * .55 - vt * 8) % (LW + 200), 128, .7);
-    const sea = g.createLinearGradient(0, hz, 0, LH); sea.addColorStop(0, '#5ccbe9'); sea.addColorStop(.35, '#2aa8d8'); sea.addColorStop(1, '#13679f'); g.fillStyle = sea; g.fillRect(0, hz, LW, LH - hz);
-    g.fillStyle = 'rgba(255,255,255,.55)'; g.fillRect(0, hz, LW, 2);
-    cutWaves(g, hz + 14, LH, 'rgba(255,255,255,.35)');
-    // beach (left) sloping into the water
-    g.fillStyle = '#e9cf8e'; g.beginPath(); g.moveTo(0, hz + 60); g.quadraticCurveTo(seaX * .6, hz + 70, seaX * .9, Y0 - 30); g.lineTo(seaX + 90, LH); g.lineTo(0, LH); g.fill();
-    g.fillStyle = '#f6e2a8'; g.beginPath(); g.moveTo(0, Y0 - 6); g.lineTo(seaX - 10, Y0); g.quadraticCurveTo(seaX + 40, Y0 + 6, seaX + 70, LH); g.lineTo(0, LH); g.fill();
-    g.strokeStyle = 'rgba(255,255,255,.8)'; g.lineWidth = 5; g.beginPath(); g.moveTo(seaX - 4, Y0 + 2 + Math.sin(vt * 2) * 3); g.quadraticCurveTo(seaX + 40, Y0 + 12, seaX + 64, LH); g.stroke();
-    g.fillStyle = 'rgba(190,150,90,.35)'; for (let i = 0; i < 26; i++) { const sx = (i * 97) % (seaX - 20), sy = Y0 + 12 + (i * 37) % (LH - Y0 - 16); g.fillRect(sx, sy, 3, 2); }
-    cutPalm(g, LW * .1, Y0 + 4, 1); cutPalm(g, LW * .26, hz + 74, .5);
-    // trampoline
-    const sq = t > 1.5 && t < 1.75 ? Math.sin((t - 1.5) / .25 * Math.PI) * 14 : 0;
-    g.strokeStyle = '#38424f'; g.lineWidth = 5; for (const dx of [-44, 44]) { g.beginPath(); g.moveTo(tx + dx, Y0 - 26); g.lineTo(tx + dx * 1.15, Y0 + 2); g.stroke(); }
-    g.fillStyle = '#1d2b3a'; g.beginPath(); g.ellipse(tx, Y0 - 26 + sq, 52, 10, 0, 0, 7); g.fill();
-    g.strokeStyle = '#ff5a5a'; g.lineWidth = 6; g.beginPath(); g.ellipse(tx, Y0 - 28, 56, 12, 0, 0, 7); g.stroke();
-    g.strokeStyle = '#ffd34d'; g.setLineDash([10, 10]); g.lineWidth = 6; g.beginPath(); g.ellipse(tx, Y0 - 28, 56, 12, 0, 0, 7); g.stroke(); g.setLineDash([]);
-    // Mason
-    let mx, my, rot = 0;
-    if (t < 1.5) { mx = -150 + (tx - PW / 2 + 150) * cutEase(t / 1.5 * .9 + .1 * t / 1.5); my = Y0 - PH + Math.round(Math.sin(vt * 22) * .8); }
-    else if (t < 1.72) { mx = tx - PW / 2; my = Y0 - PH - 30 + sq; }
-    else {
-      const u = clamp((t - 1.72) / 1.55, 0, 1);
-      mx = tx - PW / 2 + (LW * .8 - tx + PW / 2) * u; my = (Y0 - PH - 30) + (W0 - PH * .3 - (Y0 - PH - 30)) * u * u - 330 * 4 * u * (1 - u) * .9;
-      rot = u < .25 ? -.25 * u / .25 : u < .72 ? -.25 + (Math.PI * 2 + .25) * cutEase((u - .25) / .47) : Math.PI * 2 + 1.25 * cutEase((u - .72) / .28);
-    }
-    if (t < 1.5) for (let i = 0; i < 3; i++) { g.strokeStyle = 'rgba(255,255,255,.5)'; g.lineWidth = 2; g.beginPath(); const yy = my + 40 + i * 26; g.moveTo(mx - 20 - i * 14, yy); g.lineTo(mx - 70 - i * 24, yy); g.stroke(); }
-    if (t < 3.3) {
-      if (t > 3.0) { g.save(); g.beginPath(); g.rect(0, 0, LW, W0); g.clip(); cutMason(g, mx, my, rot, mx); g.restore(); }
-      else cutMason(g, mx, my, rot, mx);
-    }
-    cutParts(g);
-    if (t > 3.22) { const u = clamp((t - 3.22) / .8, 0, 1); g.strokeStyle = `rgba(255,255,255,${(1 - u).toFixed(3)})`; g.lineWidth = 3; g.beginPath(); g.ellipse(LW * .8 + PW / 2, W0 + 4, 30 + u * 120, 6 + u * 16, 0, 0, 7); g.stroke(); }
-    cutTitle(g, 'Dive into the Sea!', t, .2, 2.6);
-    if (t > 3.55) {             // the water closes over the camera
-      const c = cutEase((t - 3.55) / .95), top = LH * (1 - c) - 30;
-      const gr = g.createLinearGradient(0, top, 0, LH); gr.addColorStop(0, '#5fd0ef'); gr.addColorStop(.25, '#2a92c8'); gr.addColorStop(1, '#0f4f86'); g.fillStyle = gr;
-      g.beginPath(); g.moveTo(0, top); for (let x = 0; x <= LW; x += 30) g.lineTo(x, top + Math.sin(x * .02 + vt * 6) * 10); g.lineTo(LW, LH); g.lineTo(0, LH); g.fill();
-      g.fillStyle = 'rgba(255,255,255,.5)'; for (let i = 0; i < 30; i++) { const bx = (i * 131) % LW, by = top + 30 + ((i * 53 + vt * 160) % Math.max(1, LH - top)); g.beginPath(); g.arc(bx, LH - (by - top), 2 + i % 3, 0, 7); g.fill(); }
-    }
-  } else {
-    const SY = CUT_SY, landX = LW * .64, landY = CUT_LY;
-    cutSky(g, '#4fb6ee', '#cdeeff', SY); cutSun(g, LW * .2, 80); cutCloud(g, (LW * .6 - vt * 10) % (LW + 200), 70, .9);
-    // water (front of the beach toe)
-    const sea = g.createLinearGradient(0, SY, 0, LH); sea.addColorStop(0, 'rgba(70,190,232,.92)'); sea.addColorStop(.3, 'rgba(30,130,200,.95)'); sea.addColorStop(1, 'rgba(10,60,120,1)');
-    g.fillStyle = sea; g.beginPath(); g.moveTo(0, SY); for (let x = 0; x <= LW; x += 24) g.lineTo(x, SY + Math.sin(x * .03 + vt * 3) * 3); g.lineTo(LW, LH); g.lineTo(0, LH); g.fill();
-    g.save(); g.globalCompositeOperation = 'lighter'; for (let i = 0; i < 5; i++) { const x = LW * (.1 + i * .2) + Math.sin(vt + i) * 20; const gr = g.createLinearGradient(0, SY, 0, LH); gr.addColorStop(0, 'rgba(160,230,255,.14)'); gr.addColorStop(1, 'rgba(160,230,255,0)'); g.fillStyle = gr; g.beginPath(); g.moveTo(x, SY); g.lineTo(x + 40, SY); g.lineTo(x + 110, LH); g.lineTo(x + 30, LH); g.fill(); } g.restore();
-    g.strokeStyle = 'rgba(255,255,255,.75)'; g.lineWidth = 2.5; g.beginPath(); for (let x = 0; x <= LW; x += 24) g.lineTo(x, SY + Math.sin(x * .03 + vt * 3) * 3); g.stroke();
-    cutWaves(g, SY + 20, LH, 'rgba(200,240,255,.18)');
-    // land ahead (right): beach, grass, bushes
-    g.fillStyle = '#f2dc9e'; g.beginPath(); g.moveTo(landX - 90, LH); g.lineTo(landX - 60, SY + 40); g.quadraticCurveTo(landX + 10, landY + 6, landX + 90, landY); g.lineTo(LW, landY); g.lineTo(LW, LH); g.lineTo(landX - 60, LH); g.fill();
-    g.fillStyle = '#5cbf4a'; g.beginPath(); g.moveTo(landX + 120, landY + 2); g.quadraticCurveTo(landX + 150, landY - 14, landX + 200, landY - 12); g.lineTo(LW, landY - 12); g.lineTo(LW, landY + 18); g.lineTo(landX + 120, landY + 18); g.fill();
-    g.fillStyle = '#3e9a3a'; for (let i = 0; i < 5; i++) { const bx = landX + 230 + i * 90; if (bx > LW + 30) break; g.beginPath(); g.arc(bx, landY - 18, 22, 0, 7); g.arc(bx + 22, landY - 24, 18, 0, 7); g.fill(); }
-    cutPalm(g, landX + 170, landY, .75);
-    g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = 4; g.beginPath(); g.moveTo(landX - 70, SY + 6 + Math.sin(vt * 2) * 2); g.quadraticCurveTo(landX - 30, SY + 2, landX - 8, SY - 4 + Math.sin(vt * 2) * 2); g.stroke();
-    // Mason in the bubble, then free on his scooter
-    const b = cutBubble(t);
-    if (t < 3.15) {
-      g.save(); g.translate(b.x - PW / 2, b.y - PH / 2 - 4); g.rotate(Math.sin(vt * 2) * .05); drawSwimmer(g, vt, SAVE.mount); g.restore();
-      const R = 84 + Math.sin(vt * 5) * 3, R2 = 84 - Math.sin(vt * 5) * 3;
-      const gr = g.createRadialGradient(b.x - 24, b.y - 30, 10, b.x, b.y, R); gr.addColorStop(0, 'rgba(255,255,255,.06)'); gr.addColorStop(.8, 'rgba(170,230,255,.14)'); gr.addColorStop(1, 'rgba(200,245,255,.5)');
-      g.fillStyle = gr; g.beginPath(); g.ellipse(b.x, b.y, R, R2, 0, 0, 7); g.fill();
-      g.strokeStyle = 'rgba(235,252,255,.85)'; g.lineWidth = 2.5; g.stroke();
-      g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 6; g.lineCap = 'round'; g.beginPath(); g.arc(b.x, b.y, R - 14, -2.6, -1.9); g.stroke(); g.beginPath(); g.arc(b.x - 40, b.y - 44, 4, 0, 7); g.fillStyle = 'rgba(255,255,255,.9)'; g.fill();
-      g.save(); g.globalCompositeOperation = 'lighter'; g.strokeStyle = 'rgba(255,150,230,.25)'; g.lineWidth = 3; g.beginPath(); g.arc(b.x, b.y, R - 4, .3, 1.4); g.stroke(); g.restore();
+    if (C.ph === 'ride') {
+      scroll(C.v * el); P.y = GROUND_Y - PH; C.rot = 0;
+      if (C.tramp.x + C.tramp.w / 2 <= P.x + PW / 2 + 6) { C.ph = 'air'; C.pt = 0; C.ax = P.x; C.tramp.sq = 1; synth('boing'); missionAdd('jumps');
+        for (let i = 0; i < 10; i++) part({ x: P.x + PW / 2 + uni(-20, 20), y: GROUND_Y - 20, vx: uni(-120, 120), vy: uni(-60, -10), drag: 4, life: .35, max: .35, size: 3, grow: 6, col: [255, 255, 255], add: false, shape: 'puff', scroll: false }); }
+    } else if (C.ph === 'air') {
+      C.v *= Math.exp(-1.2 * el); scroll(C.v * el);
+      const D = 1.45, u = clamp(C.pt / D, 0, 1), tx = Math.min(C.shoreX + 230, LW - PW - 60);
+      P.x = C.ax + (tx - C.ax) * cutEase(u);
+      P.y = (GROUND_Y - PH - 26) + (CUT_SURF - PH * .35 - (GROUND_Y - PH - 26)) * u * u - 250 * 4 * u * (1 - u);
+      C.rot = u < .22 ? -.22 * u / .22 : u < .7 ? -.22 + (Math.PI * 2 + .22) * cutEase((u - .22) / .48) : Math.PI * 2 + 1.3 * cutEase((u - .7) / .3);
+      if (Math.random() < el * 30) part({ x: P.x + PW / 2 + uni(-20, 20), y: P.y + PH / 2 + uni(-20, 20), vx: uni(-60, -20), vy: uni(-10, 10), drag: 2, life: .4, max: .4, size: uni(1.5, 3), col: [255, 250, 220], shape: 'spark', scroll: false });
+      if (u >= 1) { C.ph = 'under'; C.pt = 0; C.sx = P.x + PW / 2; synth('bubble'); cutSplash(C.sx, CUT_SURF, 60); FX.shake = Math.max(FX.shake, 7); }
     } else {
-      const u = clamp((t - 3.15) / .45, 0, 1), mx0 = b.x - PW / 2, my0 = b.y - PH / 2, groundY = landY - 12 - PH;
-      let mx = mx0 + (t - 3.15) * 220, my = u < 1 ? my0 + (groundY - my0) * u * u : groundY + (t < 3.75 ? Math.sin((t - 3.6) / .15 * Math.PI) * -6 : 0);
-      cutMason(g, mx, my, u < 1 ? .25 * (1 - u) : 0, mx);
+      C.v *= Math.exp(-2 * el); scroll(C.v * el); P.y += 260 * el;
+      if (Math.random() < el * 30) cutBubbles(C.sx, CUT_SURF + 40 + C.pt * 60, 1);
+      C.cover = cutEase((C.pt - .45) / .7);
+      if (C.pt >= 1.25) { P.x = C.px0; return cutEnd(true); }
     }
-    cutParts(g);
-    cutTitle(g, 'Back to Land!', t, .3, 3.2);
-    if (t > C.dur - .45) { g.fillStyle = `rgba(255,255,255,${cutEase((t - C.dur + .45) / .45).toFixed(3)})`; g.fillRect(0, 0, LW, LH); }
+    CAM += (Math.max(0, 24 - P.y) - CAM) * Math.min(1, el * 6);
+  } else if (C.ph === 'up') {                     // ocean: the bubble rises through the surface
+    scroll(C.v * el);
+    const D = 2.3, u = clamp(C.pt / D, 0, 1), top = OC_SURF - 230;
+    P.x = C.x0 + (LW * .3 - C.x0) * cutEase(u * 1.6);
+    const prevY = P.y; P.y = C.y0 + (top - C.y0) * u * u * (.4 + .6 * u) + Math.sin(C.t * 3) * 4;
+    CAM = Math.max(0, 150 - P.y);
+    if (Math.random() < el * 18 && P.y > OC_SURF) cutBubbles(P.x + PW / 2, P.y + PH, 1);
+    if (prevY + PH / 2 > OC_SURF && P.y + PH / 2 <= OC_SURF) { synth('bubble'); cutSplash(P.x + PW / 2, OC_SURF, 50); }
+    if (u >= 1) { nextStage(true); S.collects = []; C.ph = 'down'; C.pt = 0; P.x = LW * .3; P.y = -200; CAM = 260; C.v = 300; }
+  } else if (C.ph === 'down') {                   // land: float down onto the ground and pop
+    scroll(C.v * el);
+    const D = 1.7, u = clamp(C.pt / D, 0, 1), gy = GROUND_Y - PH - 34;
+    P.x = LW * .3 + (C.px0 + 60 - LW * .3) * cutEase(u); P.y = -200 + (gy + 200) * cutEase(u) + Math.sin(C.t * 3) * 5;
+    CAM += (Math.max(0, 100 - P.y) - CAM) * Math.min(1, el * 4);
+    if (u >= 1) { C.ph = 'pop'; C.pt = 0; C.bubble = false; C.swim = false; C.vy = -120; synth('boing');
+      for (let i = 0; i < 26; i++) { const a = i / 26 * Math.PI * 2; part({ x: P.x + PW / 2 + Math.cos(a) * 80, y: P.y + PH / 2 + Math.sin(a) * 80, vx: Math.cos(a) * uni(120, 260), vy: Math.sin(a) * uni(120, 260) - 60, ay: 600, life: uni(.5, .9), max: .9, size: uni(2, 4.5), col: [225, 248, 255], add: false, shape: 'dot', scroll: false }); } }
+  } else {                                        // pop: drop onto the ground and ride on
+    scroll(C.v * el); C.v += (S.speed - C.v) * Math.min(1, el * 2);
+    if (P.y < GROUND_Y - PH) { C.vy += 1600 * el; P.y = Math.min(GROUND_Y - PH, P.y + C.vy * el); if (P.y >= GROUND_Y - PH) for (let i = 0; i < 10; i++) part({ x: P.x + PW / 2 + uni(-24, 24), y: GROUND_Y - 4, vx: uni(-90, 90), vy: uni(-50, -10), drag: 4, life: .4, max: .4, size: 3, grow: 7, col: [230, 220, 200], add: false, shape: 'puff', scroll: false }); }
+    P.x += (C.px0 - P.x) * Math.min(1, el * 3); CAM += (0 - CAM) * Math.min(1, el * 5);
+    if (C.pt >= 1.1) { P.x = C.px0; return cutEnd(false); }
   }
+}
+function cutEnd(dive) {
+  const C = CUT; CUT = null; state = 'play'; accum = 0; last = performance.now(); show('controls', true);
+  if (dive) { nextStage(true); S.collects = C.collects; }
+  else { P.y = GROUND_Y - PH; P.vy = 0; P.onGround = true; P.freeFall = false; CAM = 0; S.collects = C.collects; S.tramps = []; }
+}
+function cutWorld() {             // camera space, after the ground layer: the beach and the sea rolling in
+  const C = CUT; if (!C || C.shoreX == null) return;
+  const x0 = C.shoreX, bot = LH - CAM + 20, sy = x => CUT_SURF + Math.sin(x / 38 + vt * 2.2) * 3 + Math.sin(x / 13 - vt * 3.1) * 1.5;
+  // sand: a strip over the end of the ground, then the wet slope down into the water
+  const sg = ctx.createLinearGradient(0, GROUND_Y - 8, 0, bot); sg.addColorStop(0, '#fbe9b8'); sg.addColorStop(.15, '#f0d595'); sg.addColorStop(1, '#c99e5c');
+  ctx.fillStyle = sg; ctx.beginPath(); ctx.moveTo(x0 - 300, GROUND_Y + 4);
+  ctx.bezierCurveTo(x0 - 250, GROUND_Y - 4, x0 - 170, GROUND_Y - 6, x0 - 120, GROUND_Y - 6); ctx.lineTo(x0 - 10, GROUND_Y - 5);
+  ctx.bezierCurveTo(x0 + 30, GROUND_Y - 4, x0 + 60, GROUND_Y + 20, x0 + 110, bot); ctx.lineTo(x0 - 60, bot);
+  ctx.bezierCurveTo(x0 - 110, GROUND_Y + 60, x0 - 170, GROUND_Y + 26, x0 - 300, GROUND_Y + 4); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = 'rgba(120,80,40,.45)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x0 - 280, GROUND_Y + 1); ctx.bezierCurveTo(x0 - 220, GROUND_Y - 6, x0 - 120, GROUND_Y - 6, x0 - 10, GROUND_Y - 5); ctx.bezierCurveTo(x0 + 30, GROUND_Y - 4, x0 + 60, GROUND_Y + 20, x0 + 110, bot); ctx.stroke();
+  ctx.fillStyle = 'rgba(160,110,60,.35)'; for (let i = 0; i < 40; i++) { const px = x0 - 230 + (i * 53) % 260, py = GROUND_Y + 2 + (i * 29) % 40; if (px < x0 + (py - GROUND_Y) * .5 && px > x0 - 230 + (py - GROUND_Y) * 2) ctx.fillRect(px, py, 2.5, 1.6); }
+  for (const [sx, s] of [[x0 - 150, 1], [x0 - 70, .8]]) { ctx.save(); ctx.translate(sx, GROUND_Y - 3); ctx.rotate(.2 * s); ctx.fillStyle = '#ffd7c4'; ctx.beginPath(); ctx.moveTo(-6 * s, 0); ctx.quadraticCurveTo(0, -9 * s, 6 * s, 0); ctx.fill(); ctx.strokeStyle = '#e8a090'; ctx.lineWidth = 1; for (let k = -1; k <= 1; k++) { ctx.beginPath(); ctx.moveTo(0, -1); ctx.lineTo(k * 4 * s, -7 * s); ctx.stroke(); } ctx.restore(); }
+  // sea: same dreamy palette as the Coral Sea stage
+  const wx0 = x0 - 6, wg = ctx.createLinearGradient(0, CUT_SURF - 6, 0, bot);
+  wg.addColorStop(0, 'rgba(196,246,255,.94)'); wg.addColorStop(.12, 'rgba(134,224,246,.95)'); wg.addColorStop(.5, 'rgba(98,180,240,.97)'); wg.addColorStop(1, 'rgba(125,136,236,1)');
+  ctx.fillStyle = wg; ctx.beginPath(); ctx.moveTo(wx0, bot);
+  for (let x = wx0; x <= LW + 30; x += 10) ctx.lineTo(x, sy(x)); ctx.lineTo(LW + 30, bot); ctx.closePath(); ctx.fill();
+  const gl = ctx.createLinearGradient(0, CUT_SURF - 26, 0, CUT_SURF + 2); gl.addColorStop(0, 'rgba(255,236,250,0)'); gl.addColorStop(1, 'rgba(255,240,252,.55)');
+  ctx.fillStyle = gl; ctx.beginPath(); ctx.moveTo(wx0, CUT_SURF - 26); for (let x = wx0; x <= LW + 30; x += 10) ctx.lineTo(x, sy(x)); ctx.lineTo(LW + 30, CUT_SURF - 26); ctx.closePath(); ctx.fill();
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 6; i++) { const x = wx0 + 40 + ((i * 173 + vt * 12) % Math.max(60, LW - wx0)), g = ctx.createLinearGradient(0, CUT_SURF, 0, bot); g.addColorStop(0, `rgba(${['255,230,250', '200,250,255', '255,245,210'][i % 3]},.16)`); g.addColorStop(1, 'rgba(200,250,255,0)'); ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(x, CUT_SURF); ctx.lineTo(x + 36, CUT_SURF); ctx.lineTo(x + 120, bot); ctx.lineTo(x + 50, bot); ctx.closePath(); ctx.fill(); }
+  ctx.fillStyle = 'rgba(255,255,255,.55)'; for (let i = 0; i < 18; i++) { const x = wx0 + 20 + ((i * 97 - vt * 30) % Math.max(60, LW - wx0) + Math.max(60, LW - wx0)) % Math.max(60, LW - wx0), y = CUT_SURF + 12 + (i * 23) % 70; ctx.fillRect(x, y, 10 + (i % 3) * 6, 1.4); }
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = 2.2; ctx.beginPath(); for (let x = wx0; x <= LW + 30; x += 10) x === wx0 ? ctx.moveTo(x, sy(x)) : ctx.lineTo(x, sy(x)); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 4; ctx.lineCap = 'round'; const fx = x0 + 6 + Math.sin(vt * 1.7) * 8; ctx.beginPath(); ctx.moveTo(fx - 14, CUT_SURF - 1); ctx.quadraticCurveTo(fx + 10, CUT_SURF - 6, fx + 30, CUT_SURF); ctx.stroke(); ctx.lineCap = 'butt';
+  if (C.ph === 'under') { const u = clamp(C.pt / .8, 0, 1); ctx.strokeStyle = `rgba(255,255,255,${(1 - u).toFixed(3)})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.ellipse(C.sx, CUT_SURF + 2, 26 + u * 120, 5 + u * 14, 0, 0, 7); ctx.stroke(); }
+}
+function cutDrawMason() {
+  const C = CUT;
+  if (C.ph === 'under') return;
+  ctx.save(); ctx.translate(P.x + PW / 2, P.y + PH / 2); ctx.rotate(C.rot || 0); ctx.translate(-PW / 2, -PH / 2);
+  if (C.swim) { ctx.rotate(Math.sin(vt * 2) * .04); drawSwimmer(ctx, vt, SAVE.mount); }
+  else drawPose(ctx, SAVE.mount, 0, vt, S.worldX || 0);
+  ctx.restore();
+  if (C.bubble) {
+    const bx = P.x + PW / 2, by = P.y + PH / 2 - 4, R = 86 + Math.sin(vt * 5) * 3, R2 = 86 - Math.sin(vt * 5) * 3;
+    const gr = ctx.createRadialGradient(bx - 26, by - 30, 8, bx, by, R); gr.addColorStop(0, 'rgba(255,255,255,.08)'); gr.addColorStop(.75, 'rgba(180,235,255,.12)'); gr.addColorStop(.93, 'rgba(255,214,246,.28)'); gr.addColorStop(1, 'rgba(210,248,255,.6)');
+    ctx.fillStyle = gr; ctx.beginPath(); ctx.ellipse(bx, by, R, R2, 0, 0, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(240,252,255,.9)'; ctx.lineWidth = 2.2; ctx.stroke();
+    ctx.save(); ctx.globalCompositeOperation = 'lighter'; const cols = ['255,140,220', '140,220,255', '255,240,150'];
+    for (let i = 0; i < 3; i++) { ctx.strokeStyle = `rgba(${cols[i]},.28)`; ctx.lineWidth = 3; ctx.beginPath(); ctx.ellipse(bx, by, R - 4 - i * 2, R2 - 4 - i * 2, 0, .2 + i * 1.9 + vt, 1.2 + i * 1.9 + vt); ctx.stroke(); }
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.beginPath(); ctx.arc(bx, by, R - 15, -2.6, -1.95); ctx.stroke(); ctx.lineCap = 'butt';
+    ctx.fillStyle = 'rgba(255,255,255,.95)'; ctx.beginPath(); ctx.arc(bx - 42, by - 46, 4.5, 0, 7); ctx.fill();
+  }
+}
+function drawCutOverlay() {       // screen space: the title, and the water closing over the camera after the dive
+  const C = CUT;
+  if (C.cover > 0) {
+    const top = LH * (1 - C.cover) - 30, g = ctx.createLinearGradient(0, top, 0, LH);
+    g.addColorStop(0, '#c4f6ff'); g.addColorStop(.2, '#86e0f6'); g.addColorStop(.6, '#62b4f0'); g.addColorStop(1, '#7d88ec');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(0, top); for (let x = 0; x <= LW + 20; x += 20) ctx.lineTo(x, top + Math.sin(x * .02 + vt * 6) * 9); ctx.lineTo(LW + 20, LH); ctx.lineTo(0, LH); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 2.5; ctx.beginPath(); for (let x = 0; x <= LW; x += 20) x ? ctx.lineTo(x, top + Math.sin(x * .02 + vt * 6) * 9) : ctx.moveTo(x, top + Math.sin(vt * 6) * 9); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 1.4; for (let i = 0; i < 26; i++) { const x = (i * 131) % LW, y = LH - ((i * 53 + vt * 180) % Math.max(1, LH - top)); if (y > top + 10) { ctx.beginPath(); ctx.arc(x, y, 2 + i % 4, 0, 7); ctx.stroke(); } }
+  }
+  const a = Math.min(cutEase(C.t / .35), cutEase((2.7 - C.t) / .35)); if (a <= 0) return;
+  const font = getComputedStyle(document.documentElement).getPropertyValue('--font-display') || 'sans-serif';
+  ctx.save(); ctx.globalAlpha = a; ctx.font = `400 40px ${font}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const y = 112 - (1 - a) * 10; ctx.lineWidth = 7; ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(14,30,60,.7)'; ctx.strokeText(C.title, LW / 2, y); ctx.fillStyle = '#fff6d8'; ctx.fillText(C.title, LW / 2, y); ctx.restore();
 }
 
 // ---- entering / leaving the water ----
@@ -3573,7 +3552,6 @@ function render() {
   const wx = S.worldX || 0;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
   const k = cv.width / LW;
-  if (state === 'cut' && CUT) { const sh = FX.shake, ox = sh ? uni(-sh, sh) : 0; ctx.setTransform(k, 0, 0, k, ox * k, 0); ctx.imageSmoothingQuality = 'high'; drawCut(ctx); return; }
   const sh = FX.shake, sx = sh ? uni(-sh, sh) : 0, sy = sh ? uni(-sh, sh) * .6 : 0;
   const camT = f => ctx.setTransform(k, 0, 0, k, sx * k, (sy + CAM * f) * k);    // v12: parallax camera
   camT(.3);
@@ -3590,12 +3568,16 @@ function render() {
   for (const [key, off, y, f] of [['far', wx * 0.06 + vt * 2, 0, .55], ['mid', wx * 0.14 + vt * 4, 0, .7], ['near', wx * BG_SCROLL_FACTOR + vt * 8, 0, .85], ['ground', wx, null, 1]]) {
     camT(f);
     const draw = (set, a) => { ctx.globalAlpha = a; tileDraw(set[key], off, y == null ? GROUND_Y - set.ground.top : y); };
+    const clip = key === 'ground' && CUT && CUT.shoreX != null;   // v32: the ground ends at the beach during the dive cutscene
+    if (clip) { ctx.save(); ctx.beginPath(); ctx.rect(-60, -4000, CUT.shoreX + 120, 8000); ctx.clip(); }
     if (prevB) { draw(prevB, 1); draw(curB, S.fade); } else draw(curB, 1);
+    if (clip) ctx.restore();
   }
   ctx.globalAlpha = 1;
   if (SEA) { camT(1); drawOceanBack(); }
 
   drawPits();
+  if (CUT) cutWorld();
   drawTramps(); drawFlags();
   // back blades
   drawBlades(false, wx);
@@ -3631,7 +3613,7 @@ function render() {
   if (S.boss) { if (S.boss.charge) drawChargeWarn(S.boss); drawBoss(S.boss); }
   if (S.eproj) for (const e of S.eproj) drawEproj(e);
   // player shadow
-  if (P && !(S.pits && S.pits.some(t => !t.bridged && P.x + FOOT[0] >= t.x && P.x + FOOT[1] <= t.x + t.w))) { const gy = shadowY(), lift = clamp((gy - PH - P.y) / 300, 0, 1); ctx.fillStyle = `rgba(20,30,20,${(.32 - lift * .2).toFixed(3)})`; ctx.beginPath(); ctx.ellipse(P.x + PW / 2, gy + 1, 46 * (1 - lift * .5), 5 * (1 - lift * .4), 0, 0, 7); ctx.fill(); }
+  if (P && !CUT && !(S.pits && S.pits.some(t => !t.bridged && P.x + FOOT[0] >= t.x && P.x + FOOT[1] <= t.x + t.w))) { const gy = shadowY(), lift = clamp((gy - PH - P.y) / 300, 0, 1); ctx.fillStyle = `rgba(20,30,20,${(.32 - lift * .2).toFixed(3)})`; ctx.beginPath(); ctx.ellipse(P.x + PW / 2, gy + 1, 46 * (1 - lift * .5), 5 * (1 - lift * .4), 0, 0, 7); ctx.fill(); }
   // normal-blend particles
   drawParts(false);
 
@@ -3641,7 +3623,7 @@ function render() {
 
   // ---- player: Mason's photo, drawn after the veil so it is never re-tinted ----
   if (P && SAVE.pet && S.pet) drawPetInWorld();
-  if (P) drawPlayer();
+  if (P) { if (CUT) cutDrawMason(); else drawPlayer(); }
   drawBlades(true, wx);
   if (S.bullets) for (const u of S.bullets) drawBullet(ctx, u);
   if (S.missiles) for (const u of S.missiles) {           // v8 ride missile
@@ -3719,6 +3701,7 @@ function render() {
   if (FX.flash > 0) { const g = ctx.createRadialGradient(LW / 2, LH / 2, LH * .2, LW / 2, LH / 2, LW * .65); g.addColorStop(0, 'rgba(255,40,40,0)'); g.addColorStop(1, `rgba(220,20,30,${(FX.flash * .5).toFixed(3)})`); ctx.fillStyle = g; ctx.fillRect(0, 0, LW, LH); }
   if (FX.impactFlash > 0) { ctx.fillStyle = `rgba(255,200,120,${(FX.impactFlash * .12).toFixed(3)})`; ctx.fillRect(0, 0, LW, LH); }
   if (S.pu && S.pu.double > 0 && S.pu.magnet > 0) { const a = .18 + .08 * Math.sin(vt * 6); const g = ctx.createLinearGradient(0, 0, LW, 0); g.addColorStop(0, `rgba(255,120,200,${a})`); g.addColorStop(.12, 'rgba(255,120,200,0)'); g.addColorStop(.88, 'rgba(120,200,255,0)'); g.addColorStop(1, `rgba(120,200,255,${a})`); ctx.fillStyle = g; ctx.fillRect(0, 0, LW, LH); }
+  if (CUT) drawCutOverlay();
   if (state === 'play' || state === 'over') { drawHUD(); drawBanner(); }
 }
 
