@@ -2817,6 +2817,7 @@ function cutWorld() {             // camera space, after the ground layer: the b
 function cutDrawMason() {
   const C = CUT;
   if (C.ph === 'under') return;
+  if (!C.swim && FLAME_PAL[SAVE.mount]) flameTrail();
   ctx.save(); ctx.translate(P.x + PW / 2, P.y + PH / 2); ctx.rotate(C.rot || 0); ctx.translate(-PW / 2, -PH / 2);
   if (C.swim) { ctx.rotate(Math.sin(vt * 2) * .04); drawSwimmer(ctx, vt, SAVE.mount); }
   else drawPose(ctx, SAVE.mount, 0, vt, S.worldX || 0);
@@ -4907,6 +4908,43 @@ function drawCollectible(c) {
 }
 
 // v28: Rainbow Cloud trail - a ribbon through the cloud's recent positions in the world, so it bends and whips naturally through jumps and flips
+// v33: flame trails behind the starships: level 10 (Nova) burns orange-red, level 11 (Eclipse) burns blue-violet
+const FLAME_PAL = {
+  9: { core: '255,250,225', mid: '255,190,70', out: '255,90,30', tip: '200,40,40', spark: [[255, 220, 120], [255, 150, 60], [255, 90, 40]] },
+  10: { core: '235,245,255', mid: '120,170,255', out: '120,90,255', tip: '190,60,255', spark: [[170, 210, 255], [140, 120, 255], [210, 110, 255]] }
+};
+function flameTrail() {
+  const F = FLAME_PAL[SAVE.mount]; if (!F) return;
+  const bob = Math.sin(vt * 2.6) * 2.2, fa = P.flip < .45 ? P.flip / .45 * Math.PI * 2 : 0, c = Math.cos(fa), sn = Math.sin(fa);
+  const rot = CUT ? CUT.rot || 0 : fa, cr = Math.cos(rot), sr = Math.sin(rot);
+  const lx = -16 - PW / 2, ly = 101 + bob - PH / 2;
+  const ax = P.x + (P.dashOff || 0) + PW / 2 + lx * cr - ly * sr, ay = P.y + PH / 2 + lx * sr + ly * cr, wx = S.worldX || 0;
+  const T = P.trail || (P.trail = []);
+  if (state === 'play' || state === 'cut') { T.push({ x: ax + wx, y: ay, t: vt }); while (T.length && vt - T[0].t > .45) T.shift(); }
+  if ((state === 'play' || state === 'cut') && Math.random() < .7) { const col = F.spark[ri(0, 2)]; part({ x: ax - uni(0, 20), y: ay + uni(-5, 5), vx: -uni(60, 200), vy: uni(-50, 30), drag: 2, life: uni(.25, .5), max: .5, size: uni(1.2, 2.6), col, shape: 'spark', scroll: false }); }
+  if (T.length < 3) return;
+  const raw = T.map(p => [p.x - wx, p.y]); raw.push([ax, ay]);
+  const pts = [raw[0]];                            // resample every ~4 px so the flame stays continuous at any frame rate
+  for (let i = 1; i < raw.length; i++) { const [x0, y0] = raw[i - 1], [x1, y1] = raw[i], m = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 4)); for (let j = 1; j <= m; j++) pts.push([x0 + (x1 - x0) * j / m, y0 + (y1 - y0) * j / m]); }
+  if (pts.length > 160) pts.splice(0, pts.length - 160);
+  const n = pts.length;
+  ctx.save();
+  for (let k = 0; k < n; k++) {                    // outer flame (normal blend so it reads on a bright sky), tapering to a flickering tip
+    const f = k / (n - 1), [x, y] = pts[k], fl = 1 + .22 * Math.sin(vt * 40 + k * 1.7), r = (3 + 16 * Math.pow(f, .65)) * fl;
+    const col = f > .55 ? F.out : F.tip, ox = Math.sin(vt * 23 + k * .4) * 3 * (1 - f), oy = Math.cos(vt * 19 + k * .4) * 3 * (1 - f);
+    ctx.fillStyle = `rgba(${col},${(.04 + .1 * f).toFixed(3)})`; ctx.beginPath(); ctx.arc(x + ox, y + oy, r, 0, 7); ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  for (let k = Math.floor(n * .35); k < n; k++) {  // hot middle and white core near the nozzle
+    const f = k / (n - 1), [x, y] = pts[k], r = (2 + 9 * Math.pow(f, 1.4)) * (1 + .2 * Math.sin(vt * 50 + k));
+    ctx.fillStyle = `rgba(${F.mid},${(.3 * f).toFixed(3)})`; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+    if (f > .7) { ctx.fillStyle = `rgba(${F.core},${(.35 * (f - .7) / .3).toFixed(3)})`; ctx.beginPath(); ctx.arc(x, y, r * .5, 0, 7); ctx.fill(); }
+  }
+  const g = ctx.createRadialGradient(ax, ay, 0, ax, ay, 26); g.addColorStop(0, `rgba(${F.core},.9)`); g.addColorStop(.4, `rgba(${F.mid},.45)`); g.addColorStop(1, `rgba(${F.out},0)`);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(ax, ay, 26, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
 function cloudTrail() {
   const M = MOUNT_GEO[7], fa = P.flip < .45 ? P.flip / .45 * Math.PI * 2 : 0, bob = M.bob(vt);
   const lx = 2 - PW / 2, ly = 100 + bob - PH / 2, c = Math.cos(fa), sn = Math.sin(fa);
@@ -4939,7 +4977,7 @@ function drawPlayer() {
     ctx.restore(); return;
   }
   if (!PLAYER.photo) return;
-  if (geoOf(SAVE.mount) === 7) cloudTrail(); else P.trail = null;
+  if (geoOf(SAVE.mount) === 7) cloudTrail(); else if (FLAME_PAL[SAVE.mount]) flameTrail(); else P.trail = null;
   const bob = P.onGround && state === 'play' ? Math.round(Math.sin(vt * 22) * .6) : 0;
   ctx.save(); ctx.translate(P.x + (P.dashOff || 0), P.y + bob);
   if (S.cloudT > 0) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; const cols = ['#ff5a6a', '#ffa040', '#ffe050', '#60d070', '#50b0ff', '#7070ff', '#c060ff']; for (let i = 0; i < 7; i++) { ctx.globalAlpha = .28; ctx.strokeStyle = cols[i]; ctx.lineWidth = 4; ctx.beginPath(); ctx.ellipse(PW / 2 + 10, PH / 2 + 10, 70 - i * 4, 56 - i * 3, 0, -1.3, 1.3); ctx.stroke(); } ctx.restore(); }
