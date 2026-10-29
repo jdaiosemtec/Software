@@ -1425,7 +1425,7 @@ function step() {
   // --- hold-to-jump ---
   if (S.chargeStart !== null && P.holding) {
     const held = (S.t - S.chargeStart) / 1000;
-    if (held >= 0.7) { P.holding = false; S.chargeStart = null; P.vy = 0; }
+    if (held >= 0.7 || (P.relAt && held >= 0.12)) { P.holding = false; S.chargeStart = null; P.vy = 0; P.relAt = false; }   // v36: a quick tap still gives a clear hop
     else { const mult = 2 / 3; P.vy = -trunc(650 * mult); P.onGround = false; }
   }
   // --- player.update ---
@@ -1447,6 +1447,8 @@ function step() {
   const sy = flyingNow() ? GROUND_Y : supportY(prevBottom);
   if (sy !== null && P.y + PH >= sy && P.vy >= 0) { P.y = sy - PH; if (wasAir && P.vy > 200) landPuff(); P.vy = 0; P.onGround = true; P.dbl = false; P.tri = false; P.freeFall = false; if (P.downHeld && !P.holding) P.crouching = true; }   // v13: crouch held while landing = crouch on touchdown
   else if (P.onGround && (sy === null || P.y + PH < sy - 1)) { P.onGround = false; P.vy = 0; P.freeFall = true; }   // v14: walked off an edge -> may still jump
+  if (P.onGround && P.jumpBuf != null && S.t - P.jumpBuf < 160 && !flyingNow()) { const held = P.upHeld; jumpPress(); if (!held) { P.upHeld = false; P.relAt = true; } }   // v36: buffered jump (a short hop if already released)
+  else if (P.onGround) P.jumpBuf = null;
   if (P.y > GROUND_Y + 24) { if (pitFall()) return; }
   camStep();
   // --- move world ---
@@ -2059,9 +2061,10 @@ function nextStage(noCut) {             // v2: new scene, new hazard, counts res
 // ---------------- input ----------------
 function jumpPress() {
   if (state !== 'play') return;
-  P.upHeld = true;
+  P.upHeld = true; P.relAt = false;
   if (S.ocean) return;                                                // v26: underwater = swim up while held
-  if (S.chargeStart === null && P.onGround) { S.chargeStart = S.t; P.holding = true; P.onGround = false; jumpPuff(); missionAdd('jumps'); }
+  P.jumpBuf = S.t;                                                    // v36: a press just before landing jumps on touchdown
+  if (S.chargeStart === null && P.onGround) { P.jumpBuf = null; S.chargeStart = S.t; P.holding = true; P.onGround = false; P.crouching = false; jumpPuff(); missionAdd('jumps'); }
   else if (SAVE.triJump && SAVE.dblJump && P.dbl && !P.tri && !P.onGround && P.flip >= .45 && !flyingNow()) {   // v14 triple jump: forward air dash
     P.tri = true; S.triT = .42; P.holding = false; S.chargeStart = null; P.vy = 0; synth('jump2'); missionAdd('jumps');
     if (SAVE.mount === 11) S.cloudT = .6;                                 // v27: Rainbow Cloud dash smashes flying hazards and small monsters
@@ -2076,8 +2079,16 @@ function jumpPress() {
     for (let i = 0; i < 10; i++) { const a = i / 10 * 7; part({ x: P.x + PW / 2, y: P.y + PH, vx: Math.cos(a) * 120, vy: Math.sin(a) * 40, drag: 4, life: .35, max: .35, size: 3, grow: 6, col: [255, 255, 255], add: false, shape: 'puff' }); }
   }
 }
-function jumpRelease() { if (!P) return; P.upHeld = false; P.holding = false; if (S) S.chargeStart = null; }
-function crouchPress() { if (state !== 'play') return; P.downHeld = true; if (!S.ocean && !P.crouching && P.onGround) P.crouching = true; }
+function jumpRelease() {
+  if (!P) return; P.upHeld = false;
+  if (S && S.chargeStart !== null && P.holding && state === 'play' && !S.ocean && S.t - S.chargeStart < 120) { P.relAt = true; return; }   // v36: finish the minimum hop first
+  P.holding = false; P.relAt = false; if (S) S.chargeStart = null;
+}
+function crouchPress() {
+  if (state !== 'play') return; P.downHeld = true;
+  if (!S.ocean && !P.crouching && P.onGround) P.crouching = true;
+  else if (!S.ocean && !P.onGround && !flyingNow() && !(S.triT > 0)) { P.holding = false; P.relAt = false; S.chargeStart = null; P.vy = Math.max(P.vy, 900); }   // v36: crouch in the air = drop down fast, crouch on landing
+}
 function crouchRelease() { if (P) { P.crouching = false; P.downHeld = false; } }
 const pads = { crouch: $('padCrouch'), jump: $('padJump') };
 const touchRole = new Map();
@@ -2735,7 +2746,7 @@ function updateFx(el, tod) {
     if (Math.random() < .5) part({ x: cx, y: cy - 10, vx: uni(-15, 15), vy: -m.vy * .15, drag: 1, life: .9, max: .9, size: 6, grow: 14, col: [70, 64, 66], add: false, shape: 'puff', scroll: false });
   }
   // v2: crouch animation, scene cross-fade, banners
-  if (P) { P.cAnim = clamp(P.cAnim + (P.crouching ? 1 : -1) * el * 9, 0, 1); if (P.flip < 9) P.flip += el; }
+  if (P) { P.cAnim = clamp(P.cAnim + (P.crouching ? 1 : -1) * el * 24, 0, 1); if (P.flip < 9) P.flip += el; }
   const flying = state === 'play' && S.pu && flyingNow();
   if (flying !== padFly) { padFly = flying; pads.jump.querySelector('span').textContent = flying ? 'Fly up' : 'Hold to jump'; pads.crouch.querySelector('span').textContent = flying ? 'Fly down' : 'Crouch'; }
   if (S.fade < 1) S.fade = Math.min(1, S.fade + el / 2.5);
